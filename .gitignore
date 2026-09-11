@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-server/
+release/
+.DS_Store
+.env*
+!.env.example
+.holo/
+test-results/
+playwright-report/
+*.log

@@ -1,0 +1,2 @@
+/* System typography keeps Holo offline-capable and native on macOS. */
+@font-face{font-family:'Holo Sans';src:local('SF Pro Text'),local('Helvetica Neue');font-weight:100 900;font-style:normal;font-display:swap}
