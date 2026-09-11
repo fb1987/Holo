@@ -130,3 +130,11 @@ export type StudioEvent =
   | { type: "approval"; approval: ApprovalRequest }
   | { type: "error"; projectId?: string; message: string }
   | { type: "runtime"; runtime: RuntimeStatus };
+
+export interface StudioPreferences {
+  lastProjectId?: string | null;
+  drafts?: Record<string, string>;
+  model?: string;
+  effort?: string;
+  reducedMotion?: boolean;
+}

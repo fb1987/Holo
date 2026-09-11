@@ -4,6 +4,7 @@ import type {
   ModelOption,
   BuildMode,
   Station,
+  StudioPreferences,
 } from "../shared/types";
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
@@ -28,6 +29,13 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 export const api = {
+  preferences: () => request<StudioPreferences>("/preferences"),
+  savePreferences: (preferences: StudioPreferences) =>
+    request("/preferences", {
+      method: "POST",
+      body: JSON.stringify(preferences),
+      keepalive: true,
+    }),
   projects: () => request<Project[]>("/projects"),
   create: (
     template: "blank" | "wheel" | "enclosure",

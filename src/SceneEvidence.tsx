@@ -21,11 +21,13 @@ export function SceneEvidence({
 }) {
   const [chains, setChains] = useState<Chain[]>([]),
     [code, setCode] = useState("");
-  const contract = project.artifacts.find(
-    (a) =>
-      a.name === "behavior-contract.json" ||
-      a.path.endsWith("/behavior-contract.json"),
-  );
+  const contract = project.artifacts
+    .filter(
+      (a) =>
+        a.name === "behavior-contract.json" ||
+        a.path.endsWith("/behavior-contract.json"),
+    )
+    .at(-1);
   const codeFile = project.artifacts
     .filter((a) => a.domain === "software" && a.kind === "code")
     .at(-1);
@@ -36,7 +38,26 @@ export function SceneEvidence({
       fetch(api.fileUrl(project.id, contract.path))
         .then((r) => r.json())
         .then((data) => {
-          if (active && Array.isArray(data.chains)) setChains(data.chains);
+          if (active && Array.isArray(data.chains)) {
+            setChains(
+              data.chains.filter(
+                (c: unknown): c is Chain =>
+                  !!c &&
+                  typeof c === "object" &&
+                  [
+                    "id",
+                    "input",
+                    "controller",
+                    "behavior",
+                    "output",
+                    "consumer",
+                  ].every(
+                    (key) =>
+                      typeof (c as Record<string, unknown>)[key] === "string",
+                  ),
+              ),
+            );
+          }
         })
         .catch(() => {});
     return () => {
@@ -79,7 +100,9 @@ export function SceneEvidence({
         <span className="eyebrow">
           <Code2 size={12} />
           {chain
-            ? "EXAMPLE BEHAVIOUR · PROPOSED"
+            ? project.source === "example"
+              ? "EXAMPLE BEHAVIOUR · PROPOSED"
+              : "PROPOSED BEHAVIOUR"
             : codeFile
               ? "GENERATED SOFTWARE"
               : "BEHAVIOUR, WAITING TO BE DEFINED"}
@@ -118,7 +141,7 @@ export function SceneEvidence({
             ))}
           </div>
           <p className="logic-footnote">
-            An example contract. The board, firmware, and application still need
+            A proposed contract. The board, firmware, and application still need
             to be connected and tested.
           </p>
         </>

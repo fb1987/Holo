@@ -44,6 +44,7 @@ import type {
   RuntimeStatus,
   Station,
   StudioEvent,
+  StudioPreferences,
 } from "../shared/types";
 import { api } from "./api";
 import { HoloMark, Tray } from "./ui";
@@ -167,14 +168,18 @@ export default function App() {
     [zoomKey, setZoomKey] = useState(0);
   const [artifact, setArtifact] = useState<Artifact | null>(null),
     [artifactUrl, setArtifactUrl] = useState<string | undefined>(),
+    [showConcept, setShowConcept] = useState(false),
     [pending, setPending] = useState(false),
     [connecting, setConnecting] = useState(false);
   const [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [live, setLive] = useState<Partial<Record<Station, string>>>({}),
+    [activity, setActivity] = useState<Partial<Record<Station, string>>>({}),
     [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [serviceReady, setServiceReady] = useState(false),
-    [loading, setLoading] = useState(true);
+    [loading, setLoading] = useState(true),
+    [preferencesReady, setPreferencesReady] = useState(false);
+  const preferencesRef = useRef<StudioPreferences>({});
   const projectRef = useRef(project);
   projectRef.current = project;
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -214,13 +219,19 @@ export default function App() {
   }, []);
   useEffect(() => {
     let active = true;
-    Promise.all([api.projects(), api.runtime()])
-      .then(([ps, rt]) => {
+    Promise.all([api.projects(), api.runtime(), api.preferences()])
+      .then(([ps, rt, prefs]) => {
         if (!active) return;
         setProjects(ps);
         setRuntime(rt);
         setServiceReady(true);
-        const saved = localStorage.getItem("holo.project");
+        const saved =
+          prefs.lastProjectId || localStorage.getItem("holo.project");
+        if (prefs.drafts) setDrafts(prefs.drafts);
+        if (prefs.model !== undefined) setModel(prefs.model);
+        if (prefs.effort !== undefined) setEffort(prefs.effort);
+        if (prefs.reducedMotion !== undefined) setReduced(prefs.reducedMotion);
+        setPreferencesReady(true);
         if (saved) {
           const p = ps.find((p) => p.id === saved);
           if (p) setProject(p);
@@ -254,8 +265,10 @@ export default function App() {
             !event.project.changes.some(
               (c) => c.status === "running" || c.status === "queued",
             )
-          )
+          ) {
             setLive({});
+            setActivity({});
+          }
         } else if (
           event.type === "delta" &&
           event.projectId === projectRef.current?.id
@@ -264,7 +277,12 @@ export default function App() {
             ...old,
             [event.station]: (old[event.station] || "") + event.text,
           }));
-        else if (event.type === "approval") {
+        else if (
+          event.type === "status" &&
+          event.projectId === projectRef.current?.id
+        ) {
+          setActivity((old) => ({ ...old, [event.station]: event.status }));
+        } else if (event.type === "approval") {
           setApprovals((old) => [
             ...old.filter((a) => a.id !== event.approval.id),
             event.approval,
@@ -314,6 +332,36 @@ export default function App() {
     localStorage.setItem("holo.reduced", String(reduced));
     document.documentElement.dataset.reduced = String(reduced);
   }, [reduced]);
+  preferencesRef.current = {
+    lastProjectId: project?.id || null,
+    drafts,
+    model,
+    effort,
+    reducedMotion: reduced,
+  };
+  useEffect(() => {
+    if (!preferencesReady) return;
+    const timer = setTimeout(() => {
+      void api
+        .savePreferences(preferencesRef.current)
+        .catch((e) =>
+          setError(`Studio preferences could not be saved: ${e.message}`),
+        );
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [preferencesReady, project?.id, drafts, model, effort, reduced]);
+  useEffect(() => {
+    if (!preferencesReady) return;
+    const persist = () =>
+      navigator.sendBeacon(
+        "/api/preferences",
+        new Blob([JSON.stringify(preferencesRef.current)], {
+          type: "application/json",
+        }),
+      );
+    window.addEventListener("pagehide", persist);
+    return () => window.removeEventListener("pagehide", persist);
+  }, [preferencesReady]);
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(""), 4500);
@@ -357,7 +405,9 @@ export default function App() {
     setFlat(false);
     setSelectedPart(null);
     setArtifactUrl(undefined);
+    setShowConcept(false);
     setLive({});
+    setActivity({});
     setError("");
     setResetKey((k) => k + 1);
   };
@@ -433,6 +483,7 @@ export default function App() {
       await api.send(p.id, draft.trim(), station, model, effort);
       setDrafts((old) => ({ ...old, [project?.id || "new"]: "", [p!.id]: "" }));
       setLive({});
+      setActivity({});
       setPanel(null);
       setNotice(
         "Your planner is considering the request. Explore while the team works.",
@@ -502,10 +553,23 @@ export default function App() {
     setPanel("file");
   };
   const sample = project?.source === "example";
-  const isPlasma = !project || project.scene.kind === "plasma";
-  const summary =
-    live[working[0]]?.trim().split("\n").filter(Boolean).at(-1) ||
-    currentAgent?.summary;
+  const newestMesh = project?.artifacts
+    .filter((a) => /\.(glb|stl)$/i.test(a.path))
+    .at(-1);
+  const effectiveArtifactUrl = showConcept
+    ? undefined
+    : artifactUrl ||
+      (project && newestMesh
+        ? api.fileUrl(project.id, newestMesh.path)
+        : undefined);
+  const isPlasma =
+    (!project || project.scene.kind === "plasma") && !effectiveArtifactUrl;
+  const workingStation = working[0];
+  const workStatus = workingStation
+    ? project?.agents[workingStation]?.status === "waiting"
+      ? "Waiting for your decision on the action above."
+      : activity[workingStation] || project?.agents[workingStation]?.summary
+    : "Your request is queued.";
   const titles: Record<Exclude<Panel, null>, string> = {
     projects: "Your ideas have a home.",
     settings: "The intelligence in your studio.",
@@ -536,15 +600,15 @@ export default function App() {
             <StudioScene
               station={station}
               scene={project?.scene || EMPTY_SCENE}
-              exploded={exploded}
-              flat={flat}
+              exploded={!effectiveArtifactUrl && exploded}
+              flat={!effectiveArtifactUrl && flat}
               selectedPart={selectedPart}
               onSelectPart={setSelectedPart}
               resetKey={resetKey}
               zoomKey={zoomKey}
               reducedMotion={reduced}
               busy={busy}
-              artifactUrl={artifactUrl}
+              artifactUrl={effectiveArtifactUrl}
             />
           </Suspense>
         </SceneBoundary>
@@ -564,7 +628,7 @@ export default function App() {
           <span className="caption-line" />
         </div>
         <h1>
-          {isPlasma && !project
+          {isPlasma && (!project || project.name === "Untitled invention")
             ? "What would you like to make?"
             : project?.name}
         </h1>
@@ -578,19 +642,21 @@ export default function App() {
         <div className="scene-context">
           <span className="context-rule" />
           <span>
-            {station === "electronics"
-              ? flat
-                ? "CONCEPTUAL BOARD"
-                : "LOOKING WITHIN"
-              : station === "software"
-                ? "PHYSICAL FORM / DIGITAL BEHAVIOUR"
-                : station === "design"
-                  ? exploded
-                    ? "ASSEMBLY EXPLORATION"
-                    : "FORM & MATERIAL"
-                  : "ONE IDEA. EVERY PERSPECTIVE."}
+            {effectiveArtifactUrl
+              ? "GENERATED MODEL · REVIEW GEOMETRY"
+              : station === "electronics"
+                ? flat
+                  ? "CONCEPTUAL BOARD"
+                  : "LOOKING WITHIN"
+                : station === "software"
+                  ? "PHYSICAL FORM / DIGITAL BEHAVIOUR"
+                  : station === "design"
+                    ? exploded
+                      ? "ASSEMBLY EXPLORATION"
+                      : "FORM & MATERIAL"
+                    : "ONE IDEA. EVERY PERSPECTIVE."}
           </span>
-          {project && (
+          {project && !effectiveArtifactUrl && (
             <span className="mono">
               PRODUCT ENVELOPE
               <br />
@@ -667,6 +733,17 @@ export default function App() {
               </div>
             </div>
           ))}
+        {busy && workStatus && (
+          <div className="work-activity" role="status">
+            <Loader2 size={13} className="spin" />
+            <span>
+              <strong>
+                {workingStation ? STATION_LABELS[workingStation] : "Planner"}
+              </strong>{" "}
+              {workStatus}
+            </span>
+          </div>
+        )}
         <div className="stage-tools">
           {!project && (
             <div className="starter-actions">
@@ -710,7 +787,17 @@ export default function App() {
                 >
                   <RotateCcw size={15} />
                 </button>
-                {!isPlasma && (
+                {(newestMesh || artifactUrl) && (
+                  <button
+                    onClick={() => setShowConcept((v) => !v)}
+                    aria-pressed={showConcept}
+                    className={showConcept ? "active" : ""}
+                  >
+                    <Box size={15} />
+                    <span>Concept preview</span>
+                  </button>
+                )}
+                {!isPlasma && !effectiveArtifactUrl && (
                   <>
                     <button
                       className={exploded ? "active" : ""}
@@ -801,6 +888,8 @@ export default function App() {
             <div className="composer">
               <textarea
                 ref={inputRef}
+                maxLength={16000}
+                disabled={loading}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 rows={1}

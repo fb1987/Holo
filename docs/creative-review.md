@@ -2,13 +2,51 @@
 
 Review date: 2026-09-11. Reviewer: independent creative-direction agent.
 
+## Final visual recheck — supersedes initial outcome
+
+Revisited the running app in a fresh Chrome tab after the scene and interface refinements. Created a fresh graphite wheel reference and a blank idea through the UI. Rechecked Plan, Software, an actual example software artifact, Electronics, flat board, exploded assembly, drag and click behavior, export presentation, and the flame. The viewport remained 1461×836. No AI request was submitted and no export was downloaded. The app was still receiving live development updates, so this is an observed review of those UI states rather than a claim about a frozen release binary.
+
+**Outcome: the main visual and interaction blockers from the first review are resolved. The assessed creative score is now approximately 4.3/5.** Holo meets the proposed creative bar for an immediately explorable invention-studio prototype in the reviewed desktop viewport. This is not a sign-off on engineering validation, live agent reliability, narrow-window layouts, or the complete prompt-to-manufacturing workflow; those were not exercised by this reviewer.
+
+| Dimension                     | Final score         | Actual recheck evidence                                                                                                                                                                               |
+| ----------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Idea continuity               | 4.5                 | Graphite wheel remains the focal artifact through workstation changes; Software keeps its silhouette behind the glass behavior surface                                                                |
+| Spatial navigation            | 4                   | Workstation and assembly changes settle into deliberate poses; drag orbit does not accidentally select a part; continuous frame rate remains unmeasured                                               |
+| Visual authorship             | 4.5                 | Warm filament spine, coherent flame silhouette, restrained graphite material, calm lighting, and spatial evidence produce a recognizable studio identity                                              |
+| Bottom cockpit                | 4.5                 | Prompt and primary controls remain stable at the bottom, zoom controls are available, and export action/readiness stay together in the tray footer                                                    |
+| Useful perspectives           | 4                   | Plan shows the example's actual intent; Software shows a proposed behavior chain and links to a real conceptual file; Electronics reveals circuitry; Design explains assembly                         |
+| Exploration                   | 4.5                 | Explode immediately reveals front/board/rear; the board fits in a predictable landscape orientation; dragging does not select; a deliberate display click still selects                               |
+| Intent to consequence         | Not scored          | No live model request submitted in either review                                                                                                                                                      |
+| Trust                         | 4.5                 | Software surface says “Example behaviour · Proposed,” its real file explicitly says conceptual and untested as firmware, dimensions say Product envelope, and package sections use neutral file icons |
+| Legibility                    | 4                   | Canonical wheel, board, explosion, and flame views fit without heading or cockpit collisions; Electronics can still benefit from slightly stronger illumination                                       |
+| Accessibility and performance | 4 for tested access | Prior Escape, keyboard, and reduced-motion checks passed; the false WebGL fallback announcement is replaced by an interactive-model description; no performance or narrow-layout certification        |
+
+Resolution of the first review's findings:
+
+- **Distinct perspectives:** resolved for the reference experience. Plan displays “Explore a compact simulator steering wheel with configurable controls.” Software shows `Push button → Controller digital input → Button mapping → USB HID button → Simulator action`, clearly marked as proposed. “Open the work” opened the actual revision-zero `behavior.ts` content, with example mappings and an explicit note that pins, electrical interfaces, descriptors, and debounce are unassigned.
+- **Electronics transparency:** resolved in the observed wheel. The shell is ghosted and the board/traces are visible inside its silhouette.
+- **Canonical framing:** resolved in the reviewed viewport. The wheel clears its heading; the board is fully visible in landscape around y=234–444; the exploded structure fits around y=213–520; the flame fits around y=240–545. These are approximate screenshot coordinates, not responsive-layout guarantees.
+- **Orbit versus selection:** resolved. A drag across the wheel changed the viewing angle without adding a selection; a subsequent deliberate display click selected `display`.
+- **Exploded assembly:** resolved. The default exploded pose immediately exposes separate front, circuit-board, and rear-housing layers, aided by subtle assembly lines.
+- **Flame identity:** substantially improved. It now has a concentrated warm spine and recognizable upward silhouette, retains colored filament edges, and no longer intersects the heading or upper viewport.
+- **Package presentation:** resolved. Neutral file icons replace completion checkmarks, four example artifacts are listed, and the visible fixed footer puts the “Prepared for review” qualification directly above Export build package.
+
+Optional refinements that remain worthwhile:
+
+1. Increase board and rim illumination slightly in ghost Electronics mode so the spatial silhouette remains clear on dimmer displays.
+2. For a newly created blank idea, retain the welcoming “What would you like to make?” heading until the user provides a name; “Untitled invention” is accurate but less inviting.
+3. Develop a more continuous assembly-to-board unfold transition and richer links between selected physical parts and their behavior evidence. The current usable board mode remains a scene replacement.
+4. Continue improving text density and short-window handling as more project data accumulates. The current Software example surface and code viewer are useful but will need content-aware limits for much larger contracts/files.
+
+The original review below is retained as the iteration record. Its unresolved-language and initial scores describe the earlier build and should be read alongside the final results above.
+
 ## Scope and method
 
 Reviewed the actual app at `http://127.0.0.1:4317/` in a separate Chrome tab with a 1461×836 content viewport. Used live mouse, drag, keyboard, and checkbox interactions, with initial and settled screenshots. Reviewed the initial flame, steering-wheel reference project, all four workstations, exploded assembly, board view, and the parts, intent, software, build-package, and settings trays. Inspected scene source only to clarify observed behavior. No production UI code was changed, no model requests were submitted, and no build package was exported.
 
 The app received live updates during this review. Initial title/artifact overlap was reported immediately; later screenshots showed the wheel clearing the title after the root agent changed camera framing and added zoom buttons. Findings below distinguish that observed improvement from remaining issues. Frame rate and continuous motion smoothness were not instrumented. A narrower viewport and a real agent error/busy state were outside this review's tested scope.
 
-## Assessment
+## Initial assessment
 
 Holo already has a recognizable and coherent visual foundation: a continuous dark stage, a physical focal object, one restrained bottom cockpit, and a direct invitation to make something. It avoids the usual dashboard and robot-avatar vocabulary. The project remains legible as the same idea while switching stations, and the floating controls feel like a studio rather than a portal.
 
@@ -16,7 +54,7 @@ The next quality threshold is **making the perspectives reveal distinct informat
 
 The implementation is promising and immediately explorable. It does not yet meet the creative-direction document's proposed 4/5 release bar across assessed dimensions. The priority should be a richer truthful reference project and reliable framing/evidence layers.
 
-## Scores
+## Initial scores
 
 Scores refer to observed experience, with 1 meaning missing and 5 meaning excellent. Untested areas are not assigned an invented score.
 
@@ -35,7 +73,7 @@ Scores refer to observed experience, with 1 meaning missing and 5 meaning excell
 
 Assessed average: approximately 3.7/5. This is a useful iteration baseline, not a claim about untested functionality or manufacturing quality.
 
-## Highest-impact refinements
+## Initial highest-impact refinements
 
 ### 1. Give each station evidence that belongs to it
 

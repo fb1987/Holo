@@ -1,3 +1,5 @@
+import path from "node:path";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 const children = [];
@@ -18,7 +20,16 @@ function stop(code = 0) {
 }
 process.on("SIGINT", () => stop());
 process.on("SIGTERM", () => stop());
-run("node", ["node_modules/tsx/dist/cli.mjs", "watch", "server/index.ts"]);
+run("node", ["node_modules/tsx/dist/cli.mjs", "watch", "server/index.ts"], {
+  HOLO_DATA_DIR:
+    process.env.HOLO_DATA_DIR ||
+    path.join(
+      os.homedir(),
+      "Library",
+      "Application Support",
+      "Holo Development",
+    ),
+});
 run("node", ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1"]);
 let ready = false;
 for (let i = 0; i < 100; i++) {

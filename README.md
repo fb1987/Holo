@@ -8,7 +8,9 @@ This is an early, usable application. It includes a procedural flame, interactiv
 
 ## Start using it
 
-Requirements: macOS, Node.js 22 or newer, and a signed-in [Codex installation](https://learn.chatgpt.com/docs/quickstart) for agent work. The studio and examples work without a model connection. Model usage follows your Codex account or API billing; nothing starts generating until you send a request.
+The packaged Apple silicon app runs without Node.js. Download it from [Releases](https://github.com/fb1987/Holo/releases), unzip, and move Holo to Applications. It is an ad-hoc signed developer preview, without Apple notarization.
+
+To run from source: macOS, Node.js 22 or newer, and a signed-in [Codex installation](https://learn.chatgpt.com/docs/quickstart) for agent work. The studio and examples work without a model connection. Model usage follows your Codex account or API billing; nothing starts generating until you send a request.
 
 ```sh
 git clone https://github.com/fb1987/Holo.git
@@ -17,7 +19,7 @@ npm install
 npm run dev
 ```
 
-`npm run dev` opens the Mac app and its local workshop. For a browser-only development session:
+`npm run dev` opens the Mac app and its local workshop. Development uses `~/Library/Application Support/Holo Development` so it can run alongside the installed app without sharing project writes. For a browser-only development session:
 
 ```sh
 node scripts/dev.mjs --web
@@ -37,7 +39,7 @@ If your npm version requires approval of dependency installation scripts, approv
 6. Inspect the ongoing work or stop it from the prompt. The strategist routes the request, specialists produce their artifacts, and recommendations return to the strategist for a bounded correction round.
 7. Open **Build package** to export the intent, BOM, available artifacts, assembly and supplier briefs, and a revision manifest with file hashes.
 
-Prompt drafts are saved separately for each idea. Closing a panel never discards a draft. Requests that need extra tool permissions appear as explicit action approvals.
+Prompt drafts are saved separately for each idea. The selected idea, drafts, model, thinking depth, and motion preference are also saved in the local workshop, so they survive native app restarts. Closing a panel never discards a draft. Requests that need extra tool permissions appear as explicit action approvals.
 
 ## What is real today
 
@@ -113,6 +115,8 @@ npm run check
 npm test
 npm run build
 ```
+
+A ready-to-enable GitHub Actions configuration is in `docs/ci-workflow.example.yml`. Copy it to `.github/workflows/verify.yml` using a GitHub login with workflow permission to enable remote checks.
 
 The tests cover storage, planner routing, domain authority, recommendation bounds, cancellation, output rollback, file isolation, exports, and Codex protocol handling. Independent visual and UX reviews are recorded in `docs/` alongside the implementation notes.
 

@@ -42,7 +42,7 @@ Used the visible Export build package action three times on the reviewer-created
 
 Inspected their archive listings and the contained `ASSEMBLY.md`, `REQUEST-FOR-QUOTE.md`, and `MANIFEST.json`. The package includes project state, BOM, intent, assembly handoff, quote draft, and a manifest with file hashes. Each assembly handoff contains different mode-specific guidance. The finished quote draft explicitly says no supplier has been contacted and it is not a purchase order. All three say the concept is incomplete without project-specific engineering artifacts and that no engineering work has yet been completed.
 
-This validates a truthful concept handoff. It does not validate manufacturing readiness or the correctness of a generated mechanical/electrical design. Because the example has zero generated artifacts, this review cannot establish whether a live artifact is previewed correctly or whether stale artifact revisions receive sufficient treatment in the UI.
+This initial pass validates a truthful concept handoff. It does not validate manufacturing readiness or the correctness of a generated mechanical/electrical design. The first-pass example had zero generated artifacts; the follow-up below extends coverage to actual sample-file preview and older-revision export metadata.
 
 ## Findings and verified fixes
 

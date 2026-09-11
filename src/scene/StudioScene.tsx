@@ -907,7 +907,9 @@ function LoadedArtifact({
         const box = new THREE.Box3().setFromObject(object);
         const size = box.getSize(new THREE.Vector3());
         const center = box.getCenter(new THREE.Vector3());
-        const scale = 3.1 / Math.max(size.x, size.y, size.z, 0.001);
+        // Fit the complete bounding sphere: thick imported models must clear
+        // the title and bottom cockpit even when viewed at an angle.
+        const scale = 2.7 / Math.max(size.length(), 0.001);
         object.position.copy(center.multiplyScalar(-scale));
         object.scale.setScalar(scale);
         setLoaded({ url, object });
@@ -1016,7 +1018,19 @@ function SceneContents(props: StudioSceneProps) {
         reducedMotion={props.reducedMotion}
         flat={props.flat}
       />
-      {props.scene.kind === "plasma" ? (
+      {props.artifactUrl ? (
+        <LoadedArtifact
+          url={props.artifactUrl}
+          fallback={
+            props.scene.kind === "plasma" ? (
+              <Plasma reducedMotion={props.reducedMotion} busy={props.busy} />
+            ) : (
+              object
+            )
+          }
+          onSelect={props.onSelectPart}
+        />
+      ) : props.scene.kind === "plasma" ? (
         <Plasma reducedMotion={props.reducedMotion} busy={props.busy} />
       ) : electronic &&
         props.flat &&
@@ -1026,12 +1040,6 @@ function SceneContents(props: StudioSceneProps) {
           onSelect={props.onSelectPart}
           reducedMotion={props.reducedMotion}
           fromWheel={props.scene.kind === "wheel"}
-        />
-      ) : props.artifactUrl ? (
-        <LoadedArtifact
-          url={props.artifactUrl}
-          fallback={object}
-          onSelect={props.onSelectPart}
         />
       ) : (
         object

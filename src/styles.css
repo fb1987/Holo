@@ -2196,3 +2196,28 @@ small {
     padding: 0 20px 18px;
   }
 }
+
+.work-activity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 660px;
+  margin: 0 auto 12px;
+  padding: 10px 15px;
+  border: 1px solid #8faab329;
+  border-radius: 12px;
+  background: #0d1823dd;
+  color: #b8ced2;
+  font-size: 12px;
+  line-height: 1.5;
+  backdrop-filter: blur(16px);
+}
+.work-activity svg {
+  flex-shrink: 0;
+  color: #96d5cd;
+}
+.work-activity strong {
+  font-weight: 500;
+  color: #e1ecec;
+  margin-right: 6px;
+}
