@@ -10,6 +10,7 @@ import { createInterface } from "node:readline";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import type { ModelOption, RuntimeStatus } from "../shared/types.js";
+import { atomicWrite } from "./store.js";
 
 export interface RpcMessage {
   id?: string | number;
@@ -119,6 +120,34 @@ export class CodexRuntime extends EventEmitter implements AgentRuntime {
     }
   }
   private async probeTools() {
+    const diagnostic = {
+      version: 1,
+      checkedAt: new Date().toISOString(),
+      host: {
+        pid: process.pid,
+        node: process.versions.node,
+        electron: process.versions.electron || null,
+        executable: process.execPath,
+        cwd: this.cwd,
+      },
+      blender: {
+        source: process.env.HOLO_BLENDER_PYTHON ? "environment" : "tools.json",
+        executable: undefined as string | undefined,
+        status: "unconfigured",
+        error: undefined as string | undefined,
+        attempts: [] as Array<Record<string, unknown>>,
+      },
+    };
+    const record = async () => {
+      try {
+        await atomicWrite(
+          path.join(this.cwd, "tool-diagnostics.json"),
+          JSON.stringify(diagnostic, null, 2),
+        );
+      } catch {
+        /* Diagnostics must not prevent the workshop from opening. */
+      }
+    };
     let configured = process.env.HOLO_BLENDER_PYTHON;
     if (!configured) {
       try {
@@ -127,30 +156,75 @@ export class CodexRuntime extends EventEmitter implements AgentRuntime {
         );
         if (typeof settings.blenderPython === "string")
           configured = settings.blenderPython;
-      } catch {}
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+          diagnostic.blender.error =
+            error instanceof Error ? error.message : String(error);
+      }
     }
-    if (!configured || !path.isAbsolute(configured)) return;
+    diagnostic.blender.executable = configured;
+    if (!configured || !path.isAbsolute(configured)) {
+      if (configured) {
+        diagnostic.blender.status = "invalid-path";
+        diagnostic.blender.error = "The Blender Python path must be absolute.";
+      }
+      await record();
+      return;
+    }
     try {
       await access(configured, constants.X_OK);
-    } catch {
+    } catch (error) {
+      diagnostic.blender.status = "not-executable";
+      diagnostic.blender.error =
+        error instanceof Error ? error.message : String(error);
+      await record();
       return;
     }
     // Retry a transient native-library import failure once, within the same
     // overall startup time budget. Missing/non-executable paths never retry.
     for (let attempt = 0; attempt < 2; attempt++) {
+      const started = Date.now();
       try {
-        await promisify(execFile)(
+        const result = await promisify(execFile)(
           configured,
           ["-c", "import bpy; print(bpy.app.version_string)"],
           { cwd: this.cwd, timeout: 7500, maxBuffer: 32768 },
         );
         this.blenderPython = configured;
         this.current.tools.blender = true;
+        diagnostic.blender.status = "available";
+        diagnostic.blender.attempts.push({
+          attempt: attempt + 1,
+          durationMs: Date.now() - started,
+          success: true,
+          stdout: result.stdout.slice(0, 4000),
+          stderr: result.stderr.slice(0, 4000),
+        });
+        await record();
         return;
-      } catch {
-        /* Optional tool failure does not prevent project exploration. */
+      } catch (error) {
+        const failure = error as Error & {
+          code?: string | number;
+          signal?: string;
+          killed?: boolean;
+          stdout?: string;
+          stderr?: string;
+        };
+        diagnostic.blender.status = "import-failed";
+        diagnostic.blender.attempts.push({
+          attempt: attempt + 1,
+          durationMs: Date.now() - started,
+          success: false,
+          code: failure.code,
+          signal: failure.signal,
+          killed: failure.killed,
+          message: failure.message?.slice(0, 4000),
+          stdout: failure.stdout?.slice(0, 4000),
+          stderr: failure.stderr?.slice(0, 4000),
+        });
       }
     }
+    await record();
   }
   toolInstructions() {
     if (this.blenderPython)

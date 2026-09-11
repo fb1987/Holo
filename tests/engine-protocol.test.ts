@@ -146,7 +146,18 @@ test("native tool probes retry once, deduplicate, and refresh on explicit connec
   await Promise.all([codex.configureTools(), codex.configureTools()]);
   assert.equal(await readFile(countFile, "utf8"), "2");
   assert.equal(codex.status().tools.blender, false);
+  const failedProbe = JSON.parse(
+    await readFile(path.join(dir, "tool-diagnostics.json"), "utf8"),
+  );
+  assert.equal(failedProbe.blender.status, "import-failed");
+  assert.equal(failedProbe.blender.attempts.length, 2);
+  assert.equal(failedProbe.blender.attempts[0].code, 1);
   await codex.connect();
   assert.equal(await readFile(countFile, "utf8"), "3");
   assert.equal(codex.status().tools.blender, true);
+  const successfulProbe = JSON.parse(
+    await readFile(path.join(dir, "tool-diagnostics.json"), "utf8"),
+  );
+  assert.equal(successfulProbe.blender.status, "available");
+  assert.equal(successfulProbe.blender.attempts[0].stdout, "5.2.1");
 });

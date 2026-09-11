@@ -35,6 +35,8 @@ The configured `bpy` executable was discovered through a local `tools.json` conf
 
 A packaged native launch initially reported Blender unavailable; a subsequent full relaunch detected it. The exact cause of that transient detection failure was not established. Discovery now makes at most two import attempts within the existing 15-second probe budget, deduplicates concurrent checks, and rechecks unavailable tools when the user explicitly connects. Missing or non-executable paths are not retried.
 
+The final diagnostic build was launched as the installed native application. At 23:14:16 UTC, its Electron 44.3.0 utility process (Node 24.20.0) successfully imported `bpy` on the first attempt in 4,481 ms, returning `5.2.1 LTS` with empty stderr. Discovery records bounded per-attempt timing, exit/signal details and output in a private `tool-diagnostics.json` in the application-data directory. It does not dump environment variables or account state. This successful check does not establish the cause of the earlier intermittent failures; no interpreter-shutdown workaround was introduced.
+
 During the live generation, Blender could not complete its initial sandboxed invocation. Holo displayed an approval request for the exact project-local script. That narrowly scoped test command was explicitly approved, and the retry produced and verified the files.
 
 Guidance now asks agents to place temporary files inside their own workstation directory. A separate restricted execution probe nevertheless crashed this installed environment's native USD library with exit code 139. Therefore this environment still requires explicit command approval for Blender work. The validation does **not** establish that arbitrary Blender workloads run successfully inside the workspace sandbox.
@@ -44,7 +46,7 @@ Guidance now asks agents to place temporary files inside their own workstation d
 `npm run check` and all 18 engine/protocol tests passed after the final changes. Coverage includes:
 
 - Real JSONL handshake, authentication/model discovery, streamed turns and approval requests through a deterministic subprocess fixture.
-- Bounded native-tool probe retry, deduplication, and refresh on explicit connection.
+- Bounded native-tool probe retry, deduplication, refresh on explicit connection, and recorded success/failure diagnostics.
 - Planner-first routing, persistent specialist threads, bounded arbitration and cancellation.
 - Transaction rollback on invalid structured output or invalid artifact paths.
 - Formatting-stall detection, bounded retry, and turn-event isolation.
