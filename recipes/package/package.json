@@ -1,0 +1,8 @@
+{
+  "name": "holo-reproducible-design",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "rebuild": "node rebuild.mjs design.json output" },
+  "dependencies": { "@gltf-transform/core": "4.5.0", "manifold-3d": "3.5.3", "zod": "4.3.6" }
+}

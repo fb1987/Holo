@@ -6,6 +6,7 @@ import type {
   Station,
   StudioPreferences,
 } from "../shared/types";
+import type { WorkshopStatus } from "../server/build/broker";
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
     ...init,
@@ -29,6 +30,14 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 export const api = {
+  workshop: () => request<WorkshopStatus>("/workshop"),
+  checkWorkshop: () =>
+    request<WorkshopStatus>("/workshop/check", { method: "POST" }),
+  setWorkshopEnabled: (enabled: boolean) =>
+    request<WorkshopStatus>("/workshop", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    }),
   preferences: () => request<StudioPreferences>("/preferences"),
   savePreferences: (preferences: StudioPreferences) =>
     request("/preferences", {
@@ -51,7 +60,11 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   runtime: () => request<RuntimeStatus>("/runtime"),
-  connect: () => request<RuntimeStatus>("/runtime/connect", { method: "POST" }),
+  connect: (refreshTools = true) =>
+    request<RuntimeStatus>("/runtime/connect", {
+      method: "POST",
+      body: JSON.stringify({ refreshTools }),
+    }),
   models: () => request<ModelOption[]>("/models"),
   login: () =>
     request<{ authUrl?: string }>("/runtime/login", { method: "POST" }),

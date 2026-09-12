@@ -1,6 +1,6 @@
 {
   "name": "holo-studio",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "One idea. Every perspective. An invention studio for macOS.",
@@ -9,16 +9,19 @@
     "dev": "node scripts/dev.mjs",
     "dev:web": "vite --host 127.0.0.1",
     "dev:server": "tsx watch server/index.ts",
-    "build": "tsc --noEmit && vite build && esbuild server/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/index.js",
+    "build": "tsc --noEmit && vite build && esbuild server/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/index.js && node scripts/build-workshop.mjs",
     "start": "electron .",
     "test": "tsx --test tests/*.test.ts",
     "check": "tsc --noEmit",
     "package:mac": "node scripts/require-build-space.mjs && npm run build && electron-builder --mac dir",
-    "dist:mac": "node scripts/require-build-space.mjs && npm run build && electron-builder --mac zip"
+    "dist:mac": "node scripts/require-build-space.mjs && npm run build && electron-builder --mac zip",
+    "setup:workshop": "node scripts/setup-workshop.mjs"
   },
   "dependencies": {
+    "@gltf-transform/core": "4.5.0",
     "archiver": "^7.0.1",
     "express": "^5.1.0",
+    "manifold-3d": "3.5.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -66,7 +69,11 @@
       "icon": "public/holo.icns",
       "identity": "-"
     },
-    "asar": true
+    "asar": true,
+    "asarUnpack": [
+      "dist-server/recipes/**/*",
+      "node_modules/manifold-3d/manifold.wasm"
+    ]
   },
   "author": "Holo contributors"
 }

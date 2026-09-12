@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { designRequestSchema } from "../shared/design.js";
 
 export const stations = [
   "planning",
@@ -64,6 +65,23 @@ export const partSchema = z
 export const outputSchema = z
   .object({
     response: text.min(1),
+    designRequest: designRequestSchema.nullable().default(null),
+    deliverable: z
+      .enum(["model", "source", "discussion"])
+      .nullable()
+      .default(null),
+    dependencies: z
+      .array(
+        z
+          .object({
+            station: z.enum(["design", "electronics", "software"]),
+            requires: z.array(stationSchema).max(4),
+          })
+          .strict(),
+      )
+      .max(3)
+      .nullable()
+      .default(null),
     summary: label,
     name: z.string().trim().min(1).max(120).nullable(),
     description: text.nullable(),
@@ -144,6 +162,9 @@ export const agentOutputJsonSchema = codexCompatibleSchema(
 export function schemaForStation(station: (typeof stations)[number]) {
   const schema = structuredClone(agentOutputJsonSchema);
   if (station !== "planning") {
+    schema.properties.designRequest = { type: "null" };
+    schema.properties.deliverable = { type: "null" };
+    schema.properties.dependencies = { type: "null" };
     for (const field of ["name", "description", "goals", "constraints"])
       schema.properties[field] = { type: "null" };
   }

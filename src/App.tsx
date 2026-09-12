@@ -270,7 +270,12 @@ export default function App() {
           setPreviews((old) => {
             const next = { ...old };
             if (event.preview) next[event.projectId] = event.preview;
-            else delete next[event.projectId];
+            else if (
+              (!event.jobId || next[event.projectId]?.jobId === event.jobId) &&
+              (!event.specHash ||
+                next[event.projectId]?.specHash === event.specHash)
+            )
+              delete next[event.projectId];
             return next;
           });
         } else if (event.type === "project") {
@@ -462,11 +467,11 @@ export default function App() {
       setPending(false);
     }
   };
-  const connect = async () => {
+  const connect = async (refreshTools = true) => {
     setConnecting(true);
     setError("");
     try {
-      const rt = await api.connect();
+      const rt = await api.connect(refreshTools);
       setRuntime(rt);
       if (rt.connected) setModels(await api.models());
       return rt;
@@ -497,7 +502,7 @@ export default function App() {
     setError("");
     try {
       let rt = runtime;
-      if (!rt?.authenticated) rt = await connect();
+      if (!rt?.authenticated) rt = await connect(false);
       if (!rt?.authenticated) {
         setPanel("settings");
         setError(
@@ -619,8 +624,8 @@ export default function App() {
   const CurrentIcon = current.icon;
   const preview =
     project &&
-    !effectiveArtifactUrl &&
-    project.scene.kind === "plasma" &&
+    (previews[project.id]?.artifactUrl ||
+      (!effectiveArtifactUrl && project.scene.kind === "plasma")) &&
     project.changes.some(
       (c) => c.id === previews[project.id]?.jobId && c.status === "running",
     )
@@ -724,7 +729,8 @@ export default function App() {
               zoomKey={0}
               reducedMotion={reduced}
               busy={busy}
-              artifactUrl={effectiveArtifactUrl}
+              artifactUrl={preview?.artifactUrl || effectiveArtifactUrl}
+              artifactScopeKey={project?.id}
             />
           </Suspense>
         </SceneBoundary>
@@ -734,11 +740,21 @@ export default function App() {
         <div
           className="draft-preview-label"
           role="status"
-          title="A provisional visual sketch. The design agent is still creating the project model."
+          title={
+            preview.artifactUrl
+              ? "Real geometry from the approved specification; refinement is running."
+              : "A provisional visual sketch, not the generated model."
+          }
         >
           <Sparkles size={13} />{" "}
-          {preview.stage === "sketch" ? "First sketch" : "Concept study"}
-          <span>Provisional</span>
+          {preview.stage === "coarse"
+            ? "Building detail"
+            : preview.stage === "refined"
+              ? "Checking model"
+              : preview.stage === "sketch"
+                ? "First sketch"
+                : "Concept study"}
+          {!preview.artifactUrl && <span>Provisional</span>}
         </div>
       )}
       {project && !isPlasma && !preview && station !== "planning" && (
@@ -1089,7 +1105,7 @@ export default function App() {
               effort={effort}
               setModel={setModel}
               setEffort={setEffort}
-              onConnect={connect}
+              onConnect={() => void connect(true)}
               onLogin={login}
               busy={connecting}
               reduced={reduced}

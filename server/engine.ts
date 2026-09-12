@@ -1,4 +1,6 @@
 import path from "node:path";
+import { promises as fs } from "node:fs";
+import { checkCustomModel } from "./build/custom.js";
 import {
   getDomainRevisions,
   getCurrentArtifacts,
@@ -29,6 +31,7 @@ import {
   ProjectStore,
   StudioError,
   uid,
+  safeFile,
 } from "./store.js";
 import {
   teamRoutes,
@@ -37,6 +40,11 @@ import {
   type ModelRoute,
 } from "../shared/routing.js";
 import { PreviewManager } from "./preview.js";
+import { Workshop } from "./build/workshop.js";
+import { BuildError, WorkQueue } from "./build/broker.js";
+import { dependencyLayers } from "./build/graph.js";
+import { normalizeDesign, recipeInstructions } from "../shared/design.js";
+import { getPrimaryAssembly } from "../shared/artifacts.js";
 
 type Job = {
   id: string;
@@ -48,6 +56,10 @@ type Job = {
   preview?: ModelRoute;
 };
 export class StudioEngine {
+  readonly workshop: Workshop;
+  private commits = new WorkQueue(1);
+  private closing = false;
+  private drains = new Set<Promise<void>>();
   private previews: PreviewManager;
   private queues = new Map<string, Job[]>();
   private active = new Map<string, AbortController>();
@@ -60,6 +72,7 @@ export class StudioEngine {
     public runtime: AgentRuntime,
     private emit: (event: StudioEvent) => void,
   ) {
+    this.workshop = new Workshop(store, emit);
     this.previews = new PreviewManager(runtime, emit);
     runtime.on("runtime", (runtime) => emit({ type: "runtime", runtime }));
     runtime.on("request", (rpc: RpcMessage) => this.requestApproval(rpc));
@@ -78,7 +91,7 @@ export class StudioEngine {
     return [...this.pending.values()].map((p) => p.approval);
   }
   conceptPreviews() {
-    return this.previews.list();
+    return [...this.previews.list(), ...this.workshop.list()];
   }
   private async publish(p: Project) {
     await this.store.save(p);
@@ -88,6 +101,7 @@ export class StudioEngine {
     id: string,
     input: Pick<Job, "text" | "station" | "model" | "effort">,
   ) {
+    if (this.closing) throw new StudioError("Holo is shutting down.", 503);
     const p = this.store.get(id);
     const runtime = await this.runtime.connect();
     if (!runtime.authenticated)
@@ -144,7 +158,8 @@ export class StudioEngine {
     return { jobId: job.id };
   }
   private schedule(id: string) {
-    void this.drain(id).catch((error) =>
+    if (this.closing) return;
+    const task = this.drain(id).catch((error) =>
       this.emit({
         type: "error",
         projectId: id,
@@ -154,6 +169,8 @@ export class StudioEngine {
             : "The project could not be saved.",
       }),
     );
+    this.drains.add(task);
+    void task.finally(() => this.drains.delete(task));
   }
   private async drain(id: string) {
     if (this.active.has(id)) return;
@@ -170,6 +187,9 @@ export class StudioEngine {
         change.status = "running";
         change.startedAt = now();
         change.runs = [];
+        const jobController = new AbortController();
+        const signal = AbortSignal.any([ctrl.signal, jobController.signal]);
+        let finishBuild: (() => Promise<void>) | undefined;
         await this.publish(p);
         // Parallelism here has no dependency on committed engineering output.
         // Existing designs stay visible during edits; draft passes help empty projects.
@@ -183,7 +203,7 @@ export class StudioEngine {
             `Current intent: ${p.description}\nGoals: ${p.goals.join("; ")}\nConstraints: ${p.constraints.join("; ")}\nLatest request: ${job.text}`,
             "sketch",
             job.preview!,
-            ctrl.signal,
+            signal,
           );
         }
         try {
@@ -191,7 +211,7 @@ export class StudioEngine {
             p,
             job,
             "planning",
-            ctrl.signal,
+            signal,
             `Interpret and resolve this user intent: ${job.text}\nThe user is looking from the ${job.station} perspective. Set affected only to specialists whose work needs to change. Planning owns goals, constraints, and trade-offs. For visual or geometry requests include design. Do not perform another specialist's work yourself.`,
             change,
           );
@@ -200,7 +220,21 @@ export class StudioEngine {
             "planning",
             ...new Set(plan.affected.filter((s) => s !== "planning")),
           ];
-          if (showPreview) {
+          change.requiredOutputs = plan.designRequest
+            ? normalizeDesign(plan.designRequest).outputs
+            : plan.deliverable === "source"
+              ? ["source"]
+              : plan.deliverable === "model" ||
+                  (plan.deliverable === null &&
+                    change.affected.includes("design"))
+                ? ["model"]
+                : [];
+          if (plan.designRequest) {
+            this.previews.stop(p.id);
+            if (!change.affected.includes("design"))
+              change.affected.push("design");
+          }
+          if (showPreview && !plan.designRequest) {
             if (change.affected.includes("design"))
               void this.previews.generate(
                 p,
@@ -209,31 +243,57 @@ export class StudioEngine {
                 `${job.text}\n${plan.response}\nCurrent intent: ${p.description}\nGoals: ${p.goals.join("; ")}\nConstraints: ${p.constraints.join("; ")}`,
                 "concept",
                 job.preview!,
-                ctrl.signal,
+                signal,
               );
             else this.previews.stop(p.id);
           }
           const proposals: AgentOutput["recommendations"] = [];
-          for (const station of stations.filter(
-            (s) => s !== "planning" && change.affected.includes(s),
+          dependencyLayers(change.affected, plan.dependencies);
+          for (const layer of dependencyLayers(
+            change.affected,
+            plan.dependencies,
           )) {
-            const result = await this.runStation(
-              p,
-              job,
-              station,
-              ctrl.signal,
-              `Implement your part of this approved request: ${job.text}\nStrategic brief: ${plan.response}\nWork from the latest ../specification.json and sibling deliverables. Produce useful real artifacts now when the intent calls for them.`,
-              change,
+            if (layer.includes("design") && plan.designRequest)
+              finishBuild = await this.workshop.execute(
+                p,
+                change,
+                normalizeDesign(plan.designRequest),
+                signal,
+              );
+            const results = await Promise.allSettled(
+              layer
+                .filter(
+                  (station) => !(station === "design" && plan.designRequest),
+                )
+                .map((station) =>
+                  this.runStation(
+                    p,
+                    job,
+                    station,
+                    signal,
+                    `Implement your part of this approved request: ${job.text}\nStrategic brief: ${plan.response}\nWork from the latest ../specification.json and sibling deliverables. Produce useful real artifacts now when the intent calls for them.`,
+                    change,
+                    plan.dependencies?.find((d) => d.station === station)
+                      ?.requires,
+                  ),
+                ),
             );
-            proposals.push(...result.recommendations);
-            if (station === "design") this.previews.stop(p.id);
+            for (const result of results)
+              if (result.status === "fulfilled")
+                proposals.push(...result.value.recommendations);
+            const failed = results.find(
+              (result) => result.status === "rejected",
+            );
+            if (failed?.status === "rejected") throw failed.reason;
+            if (layer.includes("design")) this.previews.stop(p.id);
           }
+          if (finishBuild) await finishBuild();
           if (proposals.length) {
             const arbitration = await this.runStation(
               p,
               job,
               "planning",
-              ctrl.signal,
+              signal,
               `Arbitrate these specialist recommendations against the user's original intent: ${job.text}\n${JSON.stringify(proposals)}\nApprove only necessary changes. affected is the list of specialists authorized for ONE final correction round. If unresolved alternatives need the user's preference, explain them in response and leave affected empty. Pay particular attention to software changes causing enclosure or PCB footprint changes.`,
               change,
             );
@@ -241,15 +301,45 @@ export class StudioEngine {
             for (const station of stations.filter(
               (s) => s !== "planning" && arbitration.affected.includes(s),
             )) {
+              const correctionRevision = p.revision;
+              if (station === "design" && arbitration.designRequest) {
+                const finish = await this.workshop.execute(
+                  p,
+                  change,
+                  normalizeDesign(arbitration.designRequest),
+                  signal,
+                );
+                await finish();
+                continue;
+              }
               const result = await this.runStation(
                 p,
                 job,
                 station,
-                ctrl.signal,
+                signal,
                 `Final correction round authorized by the strategist: ${arbitration.response}\nOriginal intent: ${job.text}\nImplement the approved correction only. Return any unresolved cross-domain issue as a recommendation; do not start another negotiation.`,
                 change,
               );
               leftovers.push(...result.recommendations);
+              if (
+                station === "design" &&
+                change.requiredOutputs?.some((output) =>
+                  ["model", "glb", "stl", "step", "renders"].includes(output),
+                ) &&
+                (getPrimaryAssembly(p)?.revision ?? -1) <= correctionRevision
+              ) {
+                change.outcome = getPrimaryAssembly(p) ? "partial" : "failed";
+                change.error =
+                  "The final design correction did not produce an updated model. The earlier accepted model remains available.";
+                p.messages.push({
+                  id: uid(),
+                  role: "system",
+                  station: "design",
+                  jobId: job.id,
+                  createdAt: now(),
+                  text: change.error,
+                });
+              }
             }
             if (leftovers.length)
               p.messages.push({
@@ -267,6 +357,38 @@ export class StudioEngine {
           }
           if (ctrl.signal.aborted) throw new Error("Change cancelled.");
           change.status = "completed";
+          if (!change.outcome) {
+            const modelRequested = change.requiredOutputs?.includes("model");
+            const model = getPrimaryAssembly(p);
+            if (
+              modelRequested &&
+              (!model || model.revision <= change.fromRevision)
+            ) {
+              change.outcome = "failed";
+              change.error =
+                "The request finished without a new loadable model. Source and diagnostics are retained; the last accepted design remains current.";
+              p.messages.push({
+                id: uid(),
+                role: "system",
+                station: "design",
+                jobId: job.id,
+                createdAt: now(),
+                text: change.error,
+              });
+            } else if (
+              change.requiredOutputs?.includes("source") &&
+              !getCurrentArtifacts(p, "design").some(
+                (a) => a.role === "source" && a.revision > change.fromRevision,
+              )
+            ) {
+              change.outcome = "failed";
+              change.error =
+                "No new editable source was produced for this source-only request.";
+            } else {
+              change.outcome = "succeeded";
+              change.deliveredOutputs = change.requiredOutputs;
+            }
+          }
           change.toRevision = p.revision;
           // A completed agent turn is never equivalent to manufacturing verification.
           p.readiness =
@@ -274,6 +396,12 @@ export class StudioEngine {
         } catch (error) {
           change.status = ctrl.signal.aborted ? "cancelled" : "failed";
           change.error = error instanceof Error ? error.message : String(error);
+          if (!ctrl.signal.aborted)
+            change.outcome = change.deliveredOutputs?.length
+              ? "partial"
+              : error instanceof BuildError && error.kind === "unavailable"
+                ? "blocked"
+                : "failed";
           p.messages.push({
             id: uid(),
             role: "system",
@@ -285,7 +413,12 @@ export class StudioEngine {
           if (!ctrl.signal.aborted)
             this.emit({ type: "error", projectId: id, message: change.error });
         }
+        // Keep ownership until all child workers have settled, including when
+        // an independent specialist fails after a model has been accepted.
+        jobController.abort();
+        if (finishBuild) await finishBuild().catch(() => {});
         this.previews.stop(p.id);
+        this.workshop.clear(p.id, job.id);
         change.completedAt = now();
         for (const station of stations)
           if (
@@ -298,6 +431,7 @@ export class StudioEngine {
       }
     } finally {
       this.active.delete(id);
+      if (!this.active.size) void this.workshop.broker.prune().catch(() => {});
       if (this.queues.get(id)?.length) this.schedule(id);
     }
   }
@@ -308,6 +442,7 @@ export class StudioEngine {
     signal: AbortSignal,
     brief: string,
     change: ChangeRequest,
+    dependencies?: Station[],
   ) {
     if (signal.aborted) throw new Error("Change cancelled.");
     const agent = p.agents[station];
@@ -331,21 +466,29 @@ export class StudioEngine {
     const inputRevisions = getDomainRevisions(p);
     const instructions =
       domainInstructions(station) +
+      (station === "planning"
+        ? "\n" +
+          recipeInstructions() +
+          "\nSet deliverable to model when an actual model is requested, source only for an explicitly source-only request, discussion when no artifact is requested. Preserve existing designSpec parameters when editing. Declare dependencies for affected specialists as {station,requires:[...]} entries. Empty requires permits parallel work only when this specialist does not consume another affected specialist's changed output. Hardware consuming the enclosure depends on design; firmware consuming pin/power/processor interfaces depends on electronics. Omitted entries retain conservative domain order. A cosmetic-only change should affect design alone. Do not rerun hardware/software for changes that leave their declared interfaces unchanged."
+        : "") +
       "\nEfficiency: use apply_patch for source and document creation; do not emit long shell heredocs (macOS sandbox temporary-file restrictions can reject the entire write). Reuse and edit an existing generator rather than rewrite it. Batch independent reads and checks. The canonical specification is already supplied below; do not rediscover the workspace or reread it unless needed. Return recommendations only for changes requiring another domain's authority; document estimates, caveats and routine refinements in response/handoff instead of requesting needless arbitration.\n" +
       "\nWhen producing artifacts, return the complete current deliverable set for your domain, including unchanged supporting files still needed. An empty artifact list preserves previous deliverables only when your canonical domain specification is unchanged. Changed goals, decisions, BOM data, or geometry without newly registered deliverables invalidate the earlier domain files; changed geometry without a newly registered assembly invalidates the old preview. Set role to assembly only for the complete design GLB/STL, part for individual printable parts, source for editable generators/CAD, render for images, document for handoff/checks, or other. Prefer one GLB assembly with materials for viewing and STL files for individual fabrication parts. Registered files missing from a nonempty replacement set remain in history only. These roles and current-file status do not assert engineering validation.\n" +
       `\nRespond using the supplied structured output schema. response is the user-facing explanation in readable Markdown; never claim outputs that do not exist. summary is a short activity summary. Use null for fields that should not change. Every scene part uses millimetres and rotation in radians, scene dimensions use millimetres, right-handed coordinates with +Y up, +Z towards the viewer. Torus size is [outer diameter,tube diameter,depth]. Preserve stable part IDs. Keep geometry within the scene dimensions and use clearly separated mechanical/electronics domains. A procedural scene is a conceptual preview. Only design may change scene. Only electronics may replace parts. Only planning may change goals or constraints. BOM verified must be false: supplier/physical verification is outside this model's authority. Do not run paid API calls, install global software, publish, or contact suppliers. You can create a local deliverable with tools available in your assigned directory. Artifacts paths must be ${station}/artifacts/<filename>, only after writing the real file. Keep final outputs concise enough for the user to understand what changed.\n`;
-    const prompt = `Project ${p.name}; revision ${revision}; build preference ${p.buildMode}.\n${brief}\n\n${this.runtime.toolInstructions?.() || ""}\nCurrent canonical specification:\n${JSON.stringify({ description: p.description, goals: p.goals, constraints: p.constraints, scene: p.scene, parts: p.parts, decisions: p.decisions.slice(-20), artifacts: getCurrentArtifacts(p), domainState: p.domainState, primaryAssemblyId: p.primaryAssemblyId })}\n\nCurrent change ID: ${change.id}. Read local project files if needed. Your workspace is ${station}/; other domain folders are read-only. Planning should set a concise project name when it is still Untitled invention, and maintain a plain-language description of the intended object. Only planning may update name or description; other specialists return null. Preserve a deliberate existing name unless the user's request calls for a rename. If an essential detail is missing, use response to ask the user and do not invent a commitment. Do not use request_user_input tools: Holo displays your response directly. Return a complete structured result.`;
+    const prompt = `Project ${p.name}; revision ${revision}; build preference ${p.buildMode}.\n${brief}\n\n${this.runtime.toolInstructions?.() || ""}\nCurrent canonical specification:\n${JSON.stringify({ description: p.description, goals: p.goals, constraints: p.constraints, designSpec: p.designSpec, acceptedDesign: p.acceptedDesign, scene: p.scene, parts: p.parts, decisions: p.decisions.slice(-20), artifacts: getCurrentArtifacts(p), domainState: p.domainState, primaryAssemblyId: p.primaryAssemblyId })}\n\nCurrent change ID: ${change.id}. Read local project files if needed. Your workspace is ${station}/; other domain folders are read-only. Planning should set a concise project name when it is still Untitled invention, and maintain a plain-language description of the intended object. Only planning may update name or description; other specialists return null. Preserve a deliberate existing name unless the user's request calls for a rename. If an essential detail is missing, use response to ask the user and do not invent a commitment. Do not use request_user_input tools: Holo displays your response directly. Return a complete structured result.`;
     try {
-      const run = (retry = false) =>
+      const run = (retry: boolean | string = false) =>
         this.runtime.run({
           threadId: agent.threadId,
           cwd: path.join(this.store.workspace(p.id), station),
           model: route.model,
           effort: route.effort,
           instructions,
-          prompt: retry
-            ? `${prompt}\nYour previous tool work is already present, but the structured response stalled. Do not repeat successful tools. Read existing deliverables and return compact JSON using empty arrays [] where appropriate. No formatting whitespace outside the JSON strings.`
-            : prompt,
+          prompt:
+            typeof retry === "string"
+              ? `${prompt}\n${retry}`
+              : retry
+                ? `${prompt}\nYour previous tool work is already present, but the structured response stalled. Do not repeat successful tools. Read existing deliverables and return compact JSON using empty arrays [] where appropriate. No formatting whitespace outside the JSON strings.`
+                : prompt,
           outputSchema: schemaForStation(station),
           signal,
           onThread: async (id) => {
@@ -433,7 +576,7 @@ export class StudioEngine {
         raw = await run(true);
       }
       if (signal.aborted) throw new Error("Change cancelled.");
-      if (p.revision !== revision)
+      if (station === "planning" && p.revision !== revision)
         throw new StudioError(
           "Project revision changed during generation. This result was not applied.",
           409,
@@ -446,94 +589,183 @@ export class StudioEngine {
           "The agent did not return a valid Holo result. No structured design changes were applied. Send a request to retry.",
         );
       }
-      // Stage the entire result separately. Invalid or absent deliverables must
-      // not commit geometry, BOM, or revision changes to the live project.
-      const candidate = structuredClone(p);
-      this.applyOutput(candidate, station, output);
-      candidate.revision++;
-      for (const artifact of output.artifacts)
-        await this.store.registerArtifact(
-          candidate,
-          station,
-          artifact.path,
-          artifact.name,
-          artifact.role,
-        );
-      await this.store.scanArtifacts(candidate, station, false);
-      const currentIds = candidate.artifacts
-        .filter(
-          (artifact) =>
-            artifact.domain === station &&
-            artifact.revision === candidate.revision,
-        )
-        .map((artifact) => artifact.id);
-      const sceneChanged =
-        station === "design" &&
-        JSON.stringify(candidate.scene) !== JSON.stringify(p.scene);
-      const domainChanged =
-        sceneChanged ||
-        JSON.stringify([
-          candidate.name,
-          candidate.description,
-          candidate.goals,
-          candidate.constraints,
-          candidate.parts,
-          candidate.decisions,
-        ]) !==
-          JSON.stringify([
-            p.name,
-            p.description,
-            p.goals,
-            p.constraints,
-            p.parts,
-            p.decisions,
-          ]);
-      if (currentIds.length || domainChanged) {
-        recordDomainArtifacts(
-          candidate,
-          station,
-          currentIds,
-          inputRevisions,
-          !domainChanged,
-        );
-        candidate.source = "original";
+      if (station === "planning") {
+        const validate = () => {
+          if (output.designRequest) normalizeDesign(output.designRequest);
+          dependencyLayers(output.affected, output.dependencies);
+        };
+        try {
+          validate();
+        } catch (error) {
+          record.retries++;
+          record.errorKind = "invalid-input";
+          this.emit({
+            type: "status",
+            projectId: p.id,
+            station,
+            status: "Correcting the typed recipe request…",
+          });
+          const repaired = await run(
+            `The deterministic contract rejected your proposal: ${error instanceof Error ? error.message : String(error)}. Correct the typed parameters or dependency order once. Do not repeat completed tools. If the requested geometry exceeds recipe capabilities, return designRequest null and explain the missing capability.`,
+          );
+          output = outputSchema.parse(JSON.parse(repaired));
+          validate();
+        }
       }
-      if (signal.aborted) throw new Error("Change cancelled.");
-      if (p.revision !== revision)
-        throw new StudioError(
-          "Project changed before this result could be committed.",
-          409,
+      return await this.commits.run(signal, async () => {
+        const required = new Set<Station>([
+            station,
+            "planning",
+            ...(dependencies ?? stations),
+          ]),
+          currentRevisions = getDomainRevisions(p);
+        if (
+          station === "planning"
+            ? p.revision !== revision
+            : [...required].some(
+                (domain) => currentRevisions[domain] !== inputRevisions[domain],
+              )
+        )
+          throw new StudioError(
+            "A required input changed during generation. This candidate was not applied.",
+            409,
+          );
+        const commitRevision = p.revision;
+        // Stage the entire result separately. Invalid or absent deliverables must
+        // not commit geometry, BOM, or revision changes to the live project.
+        const candidate = structuredClone(p);
+        this.applyOutput(candidate, station, output);
+        candidate.revision++;
+        for (const artifact of output.artifacts)
+          await this.store.registerArtifact(
+            candidate,
+            station,
+            artifact.path,
+            artifact.name,
+            artifact.role,
+          );
+        await this.store.scanArtifacts(candidate, station, false);
+        // Source-only or failed custom work cannot demote the accepted model.
+        // Candidate files remain in history for inspection.
+        const hasNewAssembly = candidate.artifacts.some(
+          (a) =>
+            a.domain === "design" &&
+            a.revision === candidate.revision &&
+            a.role === "assembly",
         );
-      // New user requests may have joined the queue while files were staged.
-      // Preserve those operational records and commit only domain state.
-      p.name = candidate.name;
-      p.description = candidate.description;
-      p.goals = candidate.goals;
-      p.constraints = candidate.constraints;
-      p.scene = candidate.scene;
-      p.parts = candidate.parts;
-      p.decisions = candidate.decisions;
-      p.artifacts = candidate.artifacts;
-      p.domainState = candidate.domainState;
-      p.primaryAssemblyId = candidate.primaryAssemblyId;
-      p.source = candidate.source;
-      p.revision = candidate.revision;
-      p.messages.push({
-        id: uid(),
-        role: "assistant",
-        station,
-        text: output.response,
-        createdAt: now(),
-        jobId: job.id,
+        if (station === "design" && hasNewAssembly) {
+          for (const artifact of candidate.artifacts.filter(
+            (a) =>
+              a.domain === "design" &&
+              a.revision === candidate.revision &&
+              a.role === "assembly",
+          ))
+            await checkCustomModel(
+              await fs.readFile(
+                await safeFile(this.store.root(p.id), artifact.path),
+              ),
+              artifact.path,
+            );
+          delete candidate.acceptedDesign;
+          delete candidate.designSpec;
+        }
+        const currentIds = candidate.artifacts
+          .filter(
+            (artifact) =>
+              artifact.domain === station &&
+              artifact.revision === candidate.revision,
+          )
+          .map((artifact) => artifact.id);
+        const sceneChanged =
+          station === "design" &&
+          JSON.stringify(candidate.scene) !== JSON.stringify(p.scene);
+        const domainChanged =
+          sceneChanged ||
+          JSON.stringify([
+            candidate.name,
+            candidate.description,
+            candidate.goals,
+            candidate.constraints,
+            candidate.parts,
+            candidate.decisions,
+          ]) !==
+            JSON.stringify([
+              p.name,
+              p.description,
+              p.goals,
+              p.constraints,
+              p.parts,
+              p.decisions,
+            ]);
+        if (currentIds.length || domainChanged) {
+          recordDomainArtifacts(
+            candidate,
+            station,
+            currentIds,
+            inputRevisions,
+            !domainChanged,
+          );
+          candidate.source = "original";
+        }
+        if (station === "design" && !hasNewAssembly) {
+          candidate.scene = p.scene;
+          if (change.requiredOutputs?.includes("source"))
+            recordDomainArtifacts(
+              candidate,
+              "design",
+              [
+                ...getCurrentArtifacts(p, "design").map((a) => a.id),
+                ...currentIds,
+              ],
+              inputRevisions,
+              false,
+            );
+          else
+            candidate.domainState = {
+              ...candidate.domainState,
+              design: p.domainState?.design,
+            };
+          candidate.primaryAssemblyId = p.primaryAssemblyId;
+        }
+        if (signal.aborted) throw new Error("Change cancelled.");
+        if (p.revision !== commitRevision)
+          throw new StudioError(
+            "Project changed before this result could be committed.",
+            409,
+          );
+        // New user requests may have joined the queue while files were staged.
+        // Preserve those operational records and commit only domain state.
+        p.name = candidate.name;
+        p.description = candidate.description;
+        p.goals = candidate.goals;
+        p.constraints = candidate.constraints;
+        p.scene = candidate.scene;
+        p.parts = candidate.parts;
+        p.decisions = candidate.decisions;
+        p.artifacts = candidate.artifacts;
+        p.domainState = candidate.domainState;
+        p.primaryAssemblyId = candidate.primaryAssemblyId;
+        p.source = candidate.source;
+        p.designSpec = candidate.designSpec;
+        p.acceptedDesign = candidate.acceptedDesign;
+        p.revision = candidate.revision;
+        p.messages.push({
+          id: uid(),
+          role: "assistant",
+          station,
+          text: output.response,
+          createdAt: now(),
+          jobId: job.id,
+        });
+        agent.status = "idle";
+        agent.summary = output.summary;
+        agent.lastRevision = p.revision;
+        record.status = "completed";
+        record.completedAt = now();
+        await this.publish(p);
+        await this.store.snapshot(p);
+        return output;
       });
-      agent.status = "idle";
-      agent.summary = output.summary;
-      agent.lastRevision = p.revision;
-      record.status = "completed";
-      record.completedAt = now();
-      await this.publish(p);
-      await this.store.snapshot(p);
-      return output;
     } catch (error) {
       record.status = signal.aborted ? "cancelled" : "failed";
       record.completedAt = now();
@@ -544,6 +776,7 @@ export class StudioEngine {
   }
   private applyOutput(p: Project, station: Station, out: AgentOutput) {
     if (station === "planning") {
+      if (out.designRequest) p.designSpec = normalizeDesign(out.designRequest);
       if (out.name) p.name = out.name;
       if (out.description !== null) p.description = out.description;
       if (out.goals) p.goals = out.goals;
@@ -652,7 +885,10 @@ export class StudioEngine {
     return { ok: true };
   }
   async close() {
+    this.closing = true;
     for (const ctrl of this.active.values()) ctrl.abort();
-    await this.runtime.close();
+    await Promise.allSettled([this.runtime.close(), this.workshop.close()]);
+    await Promise.allSettled([...this.drains]);
+    await this.workshop.broker.prune();
   }
 }

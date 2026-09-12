@@ -118,6 +118,13 @@ export class ProjectStore {
         for (const c of p.changes)
           if (c.status === "running" || c.status === "queued") {
             c.status = "failed";
+            c.outcome = c.deliveredOutputs?.length ? "partial" : "failed";
+            for (const run of c.runs ?? [])
+              if (run.status === "running") {
+                run.status = "failed";
+                run.completedAt = now();
+                run.errorKind = "interrupted";
+              }
             c.error =
               "Holo closed before this change completed. Send a new request to continue.";
             interrupted = true;
@@ -278,6 +285,8 @@ export class ProjectStore {
         primaryAssemblyId: p.primaryAssemblyId,
         domainState: p.domainState,
         readiness: p.readiness,
+        designSpec: p.designSpec,
+        acceptedDesign: p.acceptedDesign,
       },
       null,
       2,
@@ -372,6 +381,36 @@ export class ProjectStore {
     if (station === "design" && artifact.role === "assembly")
       delete p.primaryAssemblyId;
     normalizeArtifactState(p);
+    return artifact;
+  }
+  /** Internal broker outputs bypass agent-writable folders. Not an HTTP API. */
+  async registerBuildArtifact(
+    p: Project,
+    filename: string,
+    data: Buffer | string,
+    role: Artifact["role"],
+  ): Promise<Artifact> {
+    if (
+      !/^[a-zA-Z0-9_.-]+$/.test(filename) ||
+      Buffer.byteLength(data) > 100 * 1024 * 1024
+    )
+      throw new StudioError("Invalid workshop output.");
+    const out = `artifacts/r${p.revision}/design/${filename}`;
+    const destination = path.join(this.root(p.id), out);
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await atomicWrite(destination, data);
+    const artifact: Artifact = {
+      id: sha256(out).slice(0, 20),
+      name: filename,
+      path: out,
+      kind: artifactKind(filename),
+      domain: "design",
+      revision: p.revision,
+      bytes: Buffer.byteLength(data),
+      role,
+    };
+    p.artifacts = p.artifacts.filter((a) => a.path !== out);
+    p.artifacts.push(artifact);
     return artifact;
   }
   async scanArtifacts(p: Project, station?: Station, persist = true) {

@@ -4,7 +4,7 @@
 
 Holo is a local invention studio for macOS. Describe something you might build, then move around it through **Plan, Design, Electronics, and Software**. The object stays in the spotlight. The specialists work from one versioned intent, with their own persistent Codex conversations and workspaces.
 
-This is an early, usable application. It includes a procedural flame, interactive 3D reference devices, real Codex orchestration, generated-file inspection, and build-package exports. Examples and generated engineering are clearly distinguished.
+This is an early, usable application. It includes a procedural flame, real Codex orchestration, deterministic geometry recipes, generated-file inspection, and reproducible build-package exports. Examples and generated engineering are clearly distinguished.
 
 ## Start using it
 
@@ -54,6 +54,16 @@ The cockpit is a single compact row. The perspective chooser only switches works
 - Source inspection and software behavior evidence in the stage.
 - Real ZIP build packages for DIY, mixed assembly, and supplier review.
 
+## Deterministic workshop (0.2.0)
+
+Supported soccer balls, hollow containers, controller enclosures and device cradles build from a versioned specification using local workers. Astra plans; geometry construction needs no additional model call. Coarse and detailed models share the same design. GLB validation must pass before the model becomes current, and failed corrections preserve the last good assembly. Shared detail supports grooves and raised ribs within a recessed field.
+
+Try: “Create a classic 220 mm soccer ball with black pentagons, white hexagons and no valve. Export the model and rebuild package.” A live acceptance run took 25 seconds: about 23 seconds planning and 0.76 seconds local geometry/validation. Timing varies with model service and design complexity.
+
+**Settings → Test workshop** exercises the real mesh, CAD and rendering paths separately. Built-in mesh generation ships with the app. To add optional STEP and static Blender renders, run `npm run setup:workshop` from the repository; this uses uv to provision pinned, separate environments under Holo’s application-data directory. The existing `tools.json` configuration is only for custom specialist tool use.
+
+Build packages include the accepted specification, the exact recipe source snapshot, dependency locks and a rebuild command that needs no AI account. Read [phase-two implementation and limits](docs/phase-2-implementation.md) for architecture, checks and measured evidence.
+
 ## Engineering boundaries
 
 The built-in wheel and enclosure are **conceptual reference geometry**. Their circuit boards and traces illustrate the electronics perspective; they are not fabricated PCB layouts. The example TypeScript models behavior, not flashable firmware.
@@ -87,7 +97,7 @@ Install Blender, KiCad, or other tools you want the specialists to use. Holo det
 { "blenderPython": "/absolute/path/to/your/python" }
 ```
 
-The interpreter is checked by importing `bpy`, and the working path is given to specialists. Restart the workshop after changing tool configuration.
+The interpreter is checked by a host-side `bpy` import, which does not establish that it runs inside an agent’s restricted workspace. Its path is given to specialists. Restart the workshop after changing tool configuration.
 
 Environment overrides:
 
