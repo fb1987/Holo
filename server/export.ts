@@ -1,4 +1,5 @@
 import archiver from "archiver";
+import { readRecipePackage, unpackRecipePackage } from "./build/package.js";
 import { promises as fs } from "node:fs";
 import type { Response } from "express";
 import type { Artifact, Project, Station } from "../shared/types.js";
@@ -92,6 +93,25 @@ export async function exportEntries(store: ProjectStore, p: Project) {
     ),
   };
   add("project.json", JSON.stringify(project, null, 2));
+  if (p.acceptedDesign) {
+    add("workshop/design.json", JSON.stringify(p.acceptedDesign.spec, null, 2));
+    add(
+      "workshop/accepted-build.json",
+      JSON.stringify(p.acceptedDesign, null, 2),
+    );
+    const saved = p.artifacts.find(
+      (a) => a.id === p.acceptedDesign?.sourcePackageId,
+    );
+    if (p.acceptedDesign.sourcePackageId && !saved)
+      throw new Error("The accepted recipe source package is missing.");
+    const bundle = saved
+      ? JSON.parse(
+          await fs.readFile(await store.readArtifact(p.id, saved.path), "utf8"),
+        )
+      : await readRecipePackage();
+    for (const entry of unpackRecipePackage(bundle))
+      add(entry.name, entry.data);
+  }
   add("BOM.csv", bomCsv(p));
   add(
     "DELIVERABLES.md",
@@ -162,7 +182,17 @@ export async function exportEntries(store: ProjectStore, p: Project) {
     JSON.stringify(
       {
         format: "holo-build-package",
-        version: 2,
+        version: 3,
+        acceptedDesign: p.acceptedDesign
+          ? {
+              specHash: p.acceptedDesign.specHash,
+              recipe: p.acceptedDesign.spec.recipe,
+              recipeVersion: p.acceptedDesign.spec.recipeVersion,
+              revision: p.acceptedDesign.revision,
+              validationArtifact: p.acceptedDesign.validationId,
+            }
+          : null,
+        latestOutcome: p.changes.at(-1)?.outcome ?? "unassessed",
         projectId: p.id,
         revision: p.revision,
         readiness: p.readiness,

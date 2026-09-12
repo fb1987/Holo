@@ -37,7 +37,7 @@ export interface AgentRunOptions {
 }
 export interface AgentRuntime {
   status(): RuntimeStatus;
-  connect(): Promise<RuntimeStatus>;
+  connect(refreshTools?: boolean): Promise<RuntimeStatus>;
   models(): Promise<ModelOption[]>;
   login(): Promise<{ authUrl?: string }>;
   run(options: AgentRunOptions): Promise<string>;
@@ -81,6 +81,7 @@ export class CodexRuntime extends EventEmitter implements AgentRuntime {
   private binary?: string;
   private blenderPython?: string;
   private checkingTools?: Promise<void>;
+  private toolsChecked = false;
   constructor(
     private cwd: string,
     private command?: { binary: string; args: string[] },
@@ -120,6 +121,7 @@ export class CodexRuntime extends EventEmitter implements AgentRuntime {
       await this.checkingTools;
     } finally {
       this.checkingTools = undefined;
+      this.toolsChecked = true;
     }
   }
   private async probeTools() {
@@ -231,7 +233,7 @@ export class CodexRuntime extends EventEmitter implements AgentRuntime {
   }
   toolInstructions() {
     if (this.blenderPython)
-      return `A verified Python environment with Blender bpy is installed at ${JSON.stringify(this.blenderPython)}. Use this exact Python executable to run a project-local script that imports bpy for headless modelling/rendering. Before launching Blender, create a .holo-tmp directory within your own workstation directory and set TMPDIR, TMP and TEMP to that absolute local path for the Python process. Blender requires a writable temporary session directory; the system temp directory is outside your workspace sandbox. This local temporary directory avoids unnecessary requests for broader access. Write .blend, .glb, .stl and rendered output only under your artifacts/ directory. Export GLB with metres as required by glTF, and document dimensions and conversion from the millimetre scene specification. Keep an editable Blender Python script alongside deliverables. No GUI Blender installation is required for this environment.\n`;
+      return `A Python environment passed a host-side Blender bpy import probe at ${JSON.stringify(this.blenderPython)}. The host probe does not verify execution inside your restricted workspace. If import crashes, report the unavailable capability once and preserve the existing model; do not repeatedly debug native imports or claim missing exports are complete. Use this exact Python executable to run a project-local script that imports bpy for headless modelling/rendering. Before launching Blender, create a .holo-tmp directory within your own workstation directory and set TMPDIR, TMP and TEMP to that absolute local path for the Python process. Blender requires a writable temporary session directory; the system temp directory is outside your workspace sandbox. This local temporary directory avoids unnecessary requests for broader access. Write .blend, .glb, .stl and rendered output only under your artifacts/ directory. Export GLB with metres as required by glTF, and document dimensions and conversion from the millimetre scene specification. Keep an editable Blender Python script alongside deliverables. No GUI Blender installation is required for this environment.\n`;
     const blender = discoverBinary("blender", [
       "/Applications/Blender.app/Contents/MacOS/Blender",
     ]);
@@ -239,9 +241,11 @@ export class CodexRuntime extends EventEmitter implements AgentRuntime {
       ? `Blender is available at ${JSON.stringify(blender)}. Use --background --python with project-local scripts to produce editable .blend files and preview .glb/.stl deliverables under artifacts/.\n`
       : "";
   }
-  async connect(): Promise<RuntimeStatus> {
+  async connect(refreshTools = false): Promise<RuntimeStatus> {
     if (this.connecting) return this.connecting;
-    if (!this.current.tools.blender) await this.configureTools();
+    // A failed optional native probe must not add two timeouts to every turn.
+    // Only startup and an explicit user reconnect refresh its capability.
+    if (refreshTools || !this.toolsChecked) await this.configureTools();
     if (this.connecting) return this.connecting;
     if (this.current.connected) {
       await this.readAccount();

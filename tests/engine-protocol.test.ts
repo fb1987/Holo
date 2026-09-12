@@ -202,6 +202,13 @@ test("native tool probes retry once, deduplicate, and refresh on explicit connec
   assert.equal(failedProbe.blender.attempts.length, 2);
   assert.equal(failedProbe.blender.attempts[0].code, 1);
   await codex.connect();
+  await codex.connect();
+  assert.equal(
+    await readFile(countFile, "utf8"),
+    "2",
+    "Failed optional tools are cached across ordinary connections",
+  );
+  await codex.connect(true);
   assert.equal(await readFile(countFile, "utf8"), "3");
   assert.equal(codex.status().tools.blender, true);
   const successfulProbe = JSON.parse(

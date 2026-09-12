@@ -41,6 +41,7 @@ export interface StudioSceneProps {
   reducedMotion: boolean;
   busy: boolean;
   artifactUrl?: string;
+  artifactScopeKey?: string;
 }
 
 const PALETTE: Record<Station, string> = {
@@ -876,6 +877,23 @@ function LoadedArtifact({
     object: THREE.Object3D;
   } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  const accepted = useRef<THREE.Object3D | null>(null);
+  const release = (obj: THREE.Object3D) =>
+    obj.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        (Array.isArray(child.material)
+          ? child.material
+          : [child.material]
+        ).forEach((m: THREE.Material) => m.dispose());
+      }
+    });
+  useEffect(
+    () => () => {
+      if (loaded) release(loaded.object);
+    },
+    [loaded],
+  );
   useEffect(() => {
     let disposed = false;
     let object: THREE.Object3D | undefined;
@@ -920,6 +938,7 @@ function LoadedArtifact({
         const scale = 3.7 / Math.max(size.length(), 0.001);
         object.position.copy(center.multiplyScalar(-scale));
         object.scale.setScalar(scale);
+        accepted.current = object;
         setLoaded({ url, object });
         setFailed(null);
       } catch {
@@ -929,10 +948,10 @@ function LoadedArtifact({
     void load();
     return () => {
       disposed = true;
-      if (object) release(object);
+      if (object && object !== accepted.current) release(object);
     };
   }, [url]);
-  if (loaded?.url === url)
+  if (loaded)
     return (
       <group
         onClick={(event) => {
@@ -941,6 +960,13 @@ function LoadedArtifact({
         }}
       >
         <primitive object={loaded.object} />
+        {failed === url && (
+          <Html position={[0, -1.1, 0]} center>
+            <span className="error-note">
+              New model unavailable · previous model retained
+            </span>
+          </Html>
+        )}
       </group>
     );
   return (
@@ -1028,6 +1054,7 @@ function SceneContents(props: StudioSceneProps) {
       />
       {props.artifactUrl ? (
         <LoadedArtifact
+          key={props.artifactScopeKey}
           url={props.artifactUrl}
           fallback={
             props.scene.kind === "plasma" ? (

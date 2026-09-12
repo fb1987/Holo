@@ -57,10 +57,11 @@ export class PreviewManager {
     this.active.set(projectId, { jobId, rank: 0 });
   }
   stop(projectId: string) {
+    const jobId = this.active.get(projectId)?.jobId;
     this.active.get(projectId)?.controller?.abort();
     this.active.delete(projectId);
     if (this.scenes.delete(projectId))
-      this.emit({ type: "preview", projectId, preview: null });
+      this.emit({ type: "preview", projectId, jobId, preview: null });
   }
   /** Optional work never delays, changes, or fails the canonical job. */
   async generate(

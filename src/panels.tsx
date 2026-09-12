@@ -30,6 +30,7 @@ import { api } from "./api";
 import { getCurrentArtifacts, getPrimaryAssembly } from "../shared/artifacts";
 import { Empty, Pill } from "./ui";
 import { teamRoutes } from "../shared/routing";
+import type { WorkshopStatus } from "../server/build/broker";
 export const BUILD_LABELS: Record<BuildMode, string> = {
   diy: "Build it myself",
   mixed: "Some assembly",
@@ -153,6 +154,15 @@ export function SettingsPanel({
   setReduced: (v: boolean) => void;
 }) {
   const route = teamRoutes(models, model || undefined, effort).design;
+  const [workshop, setWorkshop] = useState<WorkshopStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [workshopError, setWorkshopError] = useState("");
+  useEffect(() => {
+    void api
+      .workshop()
+      .then(setWorkshop)
+      .catch((e) => setWorkshopError(e.message));
+  }, []);
   const selected = models.find((item) => item.id === route.model);
   const levels = selected?.supportedReasoningEfforts?.length
     ? selected.supportedReasoningEfforts
@@ -219,7 +229,7 @@ export function SettingsPanel({
           <small>
             {model
               ? "This model powers every perspective."
-              : "Astra plans at high depth. Luna builds at your chosen depth, with Sol as an availability fallback."}
+              : "Astra plans at high depth. Built-in recipes run locally; Luna handles specialist work at your chosen depth, with Sol as an availability fallback."}
           </small>
         </label>
         <label>
@@ -247,6 +257,72 @@ export function SettingsPanel({
         </label>
       </div>
       <div className="section-label">LOCAL WORKSHOP</div>
+      <label className="toggle-row">
+        <span>
+          <strong>Allow built-in recipe operations</strong>
+          <small>
+            Generate and validate local models without per-step approval. Custom
+            scripts keep their existing permissions.
+          </small>
+        </span>
+        <input
+          type="checkbox"
+          checked={workshop?.enabled ?? true}
+          disabled={!workshop}
+          onChange={(e) =>
+            void api
+              .setWorkshopEnabled(e.target.checked)
+              .then(setWorkshop)
+              .catch((error) => setWorkshopError(error.message))
+          }
+        />
+      </label>
+      <div className="tool-list">
+        {(["mesh", "cad", "render"] as const).map((kind) => (
+          <div key={kind} title={workshop?.[kind].detail}>
+            <span
+              className={`status-dot ${workshop?.[kind].status === "ready" ? "online" : ""}`}
+            />
+            <span>
+              {kind === "mesh"
+                ? "Deterministic geometry"
+                : kind === "cad"
+                  ? "Solid STEP export"
+                  : "Model rendering"}
+            </span>
+            <small>{workshop?.[kind].status ?? "untested"}</small>
+          </div>
+        ))}
+      </div>
+      <button
+        className="secondary-button"
+        disabled={checking || busy}
+        onClick={() => {
+          setChecking(true);
+          setWorkshopError("");
+          void api
+            .checkWorkshop()
+            .then(setWorkshop)
+            .catch((e) => setWorkshopError(e.message))
+            .finally(() => setChecking(false));
+        }}
+      >
+        {checking ? (
+          <Loader2 size={14} className="spin" />
+        ) : (
+          <RefreshCw size={14} />
+        )}{" "}
+        Test workshop
+      </button>
+      {workshopError && <p className="error-note">{workshopError}</p>}
+      {workshop &&
+        (["mesh", "cad", "render"] as const)
+          .filter((kind) => workshop[kind].status === "unavailable")
+          .map((kind) => (
+            <p className="muted small" key={kind}>
+              {workshop[kind].detail}
+            </p>
+          ))}
       <div className="tool-list">
         {(["blender", "kicad", "python"] as const).map((tool) => (
           <div key={tool}>
@@ -257,19 +333,20 @@ export function SettingsPanel({
             />
             <span>
               {tool === "kicad"
-                ? "KiCad"
+                ? "Custom KiCad tools"
                 : tool === "python"
-                  ? "Python"
-                  : "Blender"}
+                  ? "Custom Python tools"
+                  : "Custom Blender tools"}
             </span>
-            <small>{runtime?.tools[tool] ? "Available" : "Not detected"}</small>
+            <small>
+              {runtime?.tools[tool] ? "Host detected" : "Not detected"}
+            </small>
           </div>
         ))}
       </div>
       <p className="muted small">
-        The interactive concept stage works immediately. Specialists can use
-        installed tools to produce CAD, meshes, board files, and code. Projects
-        and approvals stay visible here.
+        Custom specialists use separately installed tools and their existing
+        permissions. Built-in models and renders use the tested workshop above.
       </p>
       <label className="toggle-row">
         <span>
@@ -471,7 +548,17 @@ export function ConversationPanel({
                     <span>{duration(run.startedAt, run.completedAt)}</span>
                   </div>
                   <small>
-                    {run.model || "Codex"}
+                    {run.kind && run.kind !== "agent"
+                      ? `${run.kind === "build" ? "Local geometry" : run.kind === "cad" ? "STEP export" : "Model render"} · ${run.recipe}`
+                      : run.model || "Codex"}
+                    {run.elapsedMs !== undefined
+                      ? ` · ${(run.elapsedMs / 1000).toFixed(2)}s`
+                      : ""}
+                    {run.cached
+                      ? " · cached"
+                      : run.geometryCached
+                        ? " · reused geometry"
+                        : ""}
                     {run.effort ? ` · ${run.effort}` : ""} · {run.status}
                   </small>
                   {(run.toolCalls > 0 || run.retries > 0) && (
@@ -777,10 +864,15 @@ export function HistoryPanel({ project }: { project: Project }) {
             <article className="change-row" key={c.id}>
               <div className="change-heading">
                 <span
-                  className={`status-dot ${c.status === "completed" ? "online" : c.status === "failed" ? "failed" : ""}`}
+                  className={`status-dot ${c.outcome === "succeeded" ? "online" : c.outcome === "failed" || c.status === "failed" ? "failed" : ""}`}
                 />
                 <strong>{c.summary}</strong>
-                <Pill>{c.status}</Pill>
+                <Pill>
+                  {c.outcome ||
+                    (c.status === "completed"
+                      ? "Finished · unchecked"
+                      : c.status)}
+                </Pill>
               </div>
               <p>{c.reason}</p>
               <div className="change-domains">

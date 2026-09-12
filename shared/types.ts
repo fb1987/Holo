@@ -1,3 +1,4 @@
+import type { DesignSpec } from "./design.js";
 export type Station = "planning" | "design" | "electronics" | "software";
 export type BuildMode = "diy" | "mixed" | "finished";
 export type Vec3 = [number, number, number];
@@ -78,8 +79,18 @@ export interface ChangeRequest {
   startedAt?: string;
   completedAt?: string;
   runs?: AgentRunRecord[];
+  outcome?: "succeeded" | "partial" | "blocked" | "failed";
+  requiredOutputs?: string[];
+  deliveredOutputs?: string[];
+  specHash?: string;
 }
 export interface AgentRunRecord {
+  kind?: "agent" | "build" | "cad" | "render";
+  recipe?: string;
+  cached?: boolean;
+  geometryCached?: boolean;
+  elapsedMs?: number;
+  errorKind?: string;
   station: Station;
   model?: string;
   effort?: string;
@@ -93,7 +104,9 @@ export interface AgentRunRecord {
 export interface ConceptPreview {
   projectId: string;
   jobId: string;
-  stage: "sketch" | "concept";
+  stage: "sketch" | "concept" | "coarse" | "refined";
+  specHash?: string;
+  artifactUrl?: string;
   scene: SceneSpec;
   model: string;
   elapsedMs: number;
@@ -106,6 +119,16 @@ export interface AgentState {
   lastRevision: number;
 }
 export interface Project {
+  designSpec?: DesignSpec;
+  acceptedDesign?: {
+    spec: DesignSpec;
+    specHash: string;
+    geometryKey: string;
+    revision: number;
+    assemblyId: string;
+    validationId: string;
+    sourcePackageId?: string;
+  };
   source?: "example" | "original";
   id: string;
   name: string;
@@ -157,7 +180,13 @@ export interface ApprovalRequest {
 }
 export type StudioEvent =
   | { type: "project"; project: Project }
-  | { type: "preview"; projectId: string; preview: ConceptPreview | null }
+  | {
+      type: "preview";
+      projectId: string;
+      preview: ConceptPreview | null;
+      jobId?: string;
+      specHash?: string;
+    }
   | { type: "delta"; projectId: string; station: Station; text: string }
   | { type: "status"; projectId: string; station: Station; status: string }
   | { type: "approval"; approval: ApprovalRequest }

@@ -86,6 +86,7 @@ if (!gotLock) {
               env: {
                 ...process.env,
                 HOLO_PORT: "0",
+                HOLO_NODE_EXECUTABLE: process.execPath,
                 HOLO_DATA_DIR: path.join(app.getPath("appData"), "Holo"),
                 HOLO_STATIC_DIR: path.join(app.getAppPath(), "dist"),
               },

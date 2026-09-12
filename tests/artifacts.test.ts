@@ -173,7 +173,7 @@ test("legacy assembly selection survives newer printable parts and global softwa
   const manifest = JSON.parse(
     String(entries.find((entry) => entry.name === "MANIFEST.json")!.data),
   );
-  assert.equal(manifest.version, 2);
+  assert.equal(manifest.version, 3);
   assert.equal(manifest.primaryAssembly, current.path);
   for (const artifact of [current, electronics, software]) {
     const record = manifest.files.find(

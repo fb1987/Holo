@@ -48,6 +48,7 @@ export async function createStudioServer(options: ServerOptions = {}) {
       for (const client of clients) client.write(data);
     };
     const engine = new StudioEngine(store, runtime, emit);
+    await engine.workshop.init();
     const allowed = new Set(
       options.allowedOrigins || [
         "http://127.0.0.1:4317",
@@ -79,10 +80,38 @@ export async function createStudioServer(options: ServerOptions = {}) {
     });
     app.use(express.json({ limit: "128kb" }));
     await mountPreferences(app, store.dataDir);
-    app.get("/api/runtime", (_req, res) => res.json(runtime.status()));
-    app.post("/api/runtime/connect", async (_req, res) =>
-      res.json(await runtime.connect()),
+    app.get("/api/workshop", (_req, res) => res.json(engine.workshop.status()));
+    app.post("/api/workshop", async (req, res) => {
+      const { enabled } = z
+        .object({ enabled: z.boolean() })
+        .strict()
+        .parse(req.body);
+      res.json(await engine.workshop.setEnabled(enabled));
+    });
+    app.post("/api/workshop/check", async (_req, res) =>
+      res.json(await engine.workshop.healthCheck(AbortSignal.timeout(150000))),
     );
+    app.get("/api/projects/:id/build-preview/:jobId/:specHash", (req, res) => {
+      store.get(req.params.id);
+      const file = engine.workshop.previewFile(
+        req.params.id,
+        req.params.jobId,
+        req.params.specHash,
+      );
+      if (!file)
+        return res
+          .status(404)
+          .json({ error: "This build preview has expired." });
+      res.type("model/gltf-binary").sendFile(file);
+    });
+    app.get("/api/runtime", (_req, res) => res.json(runtime.status()));
+    app.post("/api/runtime/connect", async (req, res) => {
+      const { refreshTools } = z
+        .object({ refreshTools: z.boolean().default(true) })
+        .strict()
+        .parse(req.body || {});
+      res.json(await runtime.connect(refreshTools));
+    });
     app.post("/api/runtime/login", async (_req, res) =>
       res.json(await runtime.login()),
     );

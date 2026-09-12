@@ -102,7 +102,25 @@ class ReviewRuntime extends EventEmitter implements AgentRuntime {
     return path.basename(o.cwd) === "planning"
       ? output({
           affected: ["design"],
-          name: "Interface review · Recycling bin",
+          name: process.env.HOLO_REVIEW_RECIPE
+            ? `Interface review · ${process.env.HOLO_REVIEW_RECIPE}`
+            : "Interface review · Recycling bin",
+          ...(process.env.HOLO_REVIEW_RECIPE
+            ? {
+                deliverable: "model",
+                designRequest: {
+                  recipe: process.env.HOLO_REVIEW_RECIPE,
+                  version: "1.0.0",
+                  parameters: [],
+                  bodyColor:
+                    process.env.HOLO_REVIEW_RECIPE === "paneled-ball"
+                      ? "#ffffff"
+                      : blue,
+                  accentColor: "#111111",
+                  outputs: ["glb", "stl"],
+                },
+              }
+            : {}),
         })
       : output({ scene });
   }
