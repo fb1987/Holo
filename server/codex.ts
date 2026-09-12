@@ -21,6 +21,9 @@ export interface RpcMessage {
 }
 export class StructuredOutputStallError extends Error {}
 export interface AgentRunOptions {
+  /** Read-only ephemeral concept passes cannot ask for broader execution. */
+  readOnly?: boolean;
+  ephemeral?: boolean;
   threadId?: string;
   cwd: string;
   model?: string;
@@ -399,9 +402,10 @@ export class CodexRuntime extends EventEmitter implements AgentRuntime {
     const threadParams = {
       cwd: options.cwd,
       model: options.model,
-      approvalPolicy: "on-request",
+      approvalPolicy: options.readOnly ? "never" : "on-request",
       approvalsReviewer: "user",
-      sandbox: "workspace-write",
+      sandbox: options.readOnly ? "read-only" : "workspace-write",
+      ephemeral: options.ephemeral,
       developerInstructions: options.instructions,
     };
     if (threadId)
@@ -410,6 +414,13 @@ export class CodexRuntime extends EventEmitter implements AgentRuntime {
       const result = await this.request("thread/start", threadParams);
       threadId = result.thread.id;
       await options.onThread(threadId!);
+    }
+    // Cancellation can arrive while the runtime is creating/resuming a thread.
+    // Never start a fresh turn after a disposable pass has been superseded.
+    if (options.signal?.aborted) {
+      if (options.ephemeral)
+        void this.request("thread/unsubscribe", { threadId }).catch(() => {});
+      throw new Error("Change cancelled.");
     }
     let turnId: string | undefined;
     let finalText = "",
@@ -441,6 +452,8 @@ export class CodexRuntime extends EventEmitter implements AgentRuntime {
         if (finished) return;
         finished = true;
         cleanup();
+        if (options.ephemeral)
+          void this.request("thread/unsubscribe", { threadId }).catch(() => {});
         if (error) reject(error);
         else resolve(finalText || lastText);
       };
@@ -552,15 +565,17 @@ export class CodexRuntime extends EventEmitter implements AgentRuntime {
           model: options.model,
           effort: options.effort || "high",
           cwd: options.cwd,
-          approvalPolicy: "on-request",
+          approvalPolicy: options.readOnly ? "never" : "on-request",
           approvalsReviewer: "user",
-          sandboxPolicy: {
-            type: "workspaceWrite",
-            writableRoots: [options.cwd],
-            networkAccess: false,
-            excludeTmpdirEnvVar: true,
-            excludeSlashTmp: true,
-          },
+          sandboxPolicy: options.readOnly
+            ? { type: "readOnly" }
+            : {
+                type: "workspaceWrite",
+                writableRoots: [options.cwd],
+                networkAccess: false,
+                excludeTmpdirEnvVar: true,
+                excludeSlashTmp: true,
+              },
           outputSchema: options.outputSchema,
         },
         60000,

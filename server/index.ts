@@ -140,6 +140,10 @@ export async function createStudioServer(options: ServerOptions = {}) {
         res.write(
           `data: ${JSON.stringify({ type: "approval", approval })}\n\n`,
         );
+      for (const preview of engine.conceptPreviews())
+        res.write(
+          `data: ${JSON.stringify({ type: "preview", projectId: preview.projectId, preview })}\n\n`,
+        );
       const heartbeat = setInterval(() => res.write(": heartbeat\n\n"), 15000);
       req.on("close", () => {
         clearInterval(heartbeat);

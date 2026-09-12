@@ -29,6 +29,7 @@ import type {
 import { api } from "./api";
 import { getCurrentArtifacts, getPrimaryAssembly } from "../shared/artifacts";
 import { Empty, Pill } from "./ui";
+import { teamRoutes } from "../shared/routing";
 export const BUILD_LABELS: Record<BuildMode, string> = {
   diy: "Build it myself",
   mixed: "Some assembly",
@@ -151,11 +152,17 @@ export function SettingsPanel({
   reduced: boolean;
   setReduced: (v: boolean) => void;
 }) {
-  const selected =
-    models.find((m) => m.id === model) || models.find((m) => m.isDefault);
-  const levels = selected?.supportedReasoningEfforts || [
-    { reasoningEffort: "high", description: "Deep reasoning" },
-  ];
+  const route = teamRoutes(models, model || undefined, effort).design;
+  const selected = models.find((item) => item.id === route.model);
+  const levels = selected?.supportedReasoningEfforts?.length
+    ? selected.supportedReasoningEfforts
+    : [...new Set([effort, "low", "medium", "high"])].map(
+        (reasoningEffort) => ({ reasoningEffort }),
+      );
+  const effectiveEffort = route.effort || effort;
+  useEffect(() => {
+    if (effort !== effectiveEffort) setEffort(effectiveEffort);
+  }, [effort, effectiveEffort, setEffort]);
   return (
     <>
       <div className="connection-card">
@@ -201,7 +208,7 @@ export function SettingsPanel({
         <label>
           Model
           <select value={model} onChange={(e) => setModel(e.target.value)}>
-            <option value="">Codex default</option>
+            <option value="">Automatic team</option>
             {models.map((m) => (
               <option value={m.id} key={m.id}>
                 {m.displayName || m.id}
@@ -209,16 +216,16 @@ export function SettingsPanel({
               </option>
             ))}
           </select>
-          <small>The same selected model powers each specialist.</small>
+          <small>
+            {model
+              ? "This model powers every perspective."
+              : "Astra plans at high depth. Luna builds at your chosen depth, with Sol as an availability fallback."}
+          </small>
         </label>
         <label>
-          Thinking depth
+          {model ? "Thinking depth" : "Specialist thinking depth"}
           <select
-            value={
-              levels.some((l) => l.reasoningEffort === effort)
-                ? effort
-                : levels[0]?.reasoningEffort
-            }
+            value={effectiveEffort}
             onChange={(e) => setEffort(e.target.value)}
           >
             {levels.map((l) => (
@@ -393,73 +400,166 @@ export function ConversationPanel({
   project: Project | null;
   live: Partial<Record<Station, string>>;
 }) {
-  const end = useRef<HTMLDivElement>(null);
+  const scroll = useRef<HTMLDivElement>(null);
+  const following = useRef(true);
+  const [unread, setUnread] = useState(false);
+  const latestRun = project?.changes
+    .slice()
+    .reverse()
+    .find((change) => change.runs?.length);
+  const duration = (start?: string, end?: string) => {
+    if (!start || !end) return "In progress";
+    const seconds = Math.max(
+      0,
+      Math.round((Date.parse(end) - Date.parse(start)) / 1000),
+    );
+    return seconds < 60
+      ? `${seconds}s`
+      : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  };
+  const jumpToLatest = () => {
+    following.current = true;
+    setUnread(false);
+    const el = scroll.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  };
   useEffect(() => {
-    end.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (!following.current) {
+      setUnread(true);
+      return;
+    }
+    const frame = requestAnimationFrame(jumpToLatest);
+    return () => cancelAnimationFrame(frame);
   }, [project?.messages.length, live]);
+  useEffect(() => {
+    const el = scroll.current;
+    if (!el) return;
+    const resize = new ResizeObserver(() => {
+      if (following.current) el.scrollTop = el.scrollHeight;
+    });
+    resize.observe(el);
+    return () => resize.disconnect();
+  }, []);
   return (
-    <>
-      {!project?.messages.length && !Object.keys(live).length ? (
-        <Empty title="Every idea starts with a conversation.">
-          Describe what you want to make in the prompt below. The planner will
-          carry your intent to the right specialists.
-        </Empty>
-      ) : (
-        <div className="transcript">
-          {project?.messages.map((m) => (
-            <article key={m.id} className={`message ${m.role}`}>
-              <div className="message-byline">
-                <span>
-                  {m.role === "user"
-                    ? "YOU"
-                    : m.role === "system"
-                      ? "STUDIO"
-                      : STATION_LABELS[m.station].toUpperCase()}
-                </span>
-                <time>
-                  {new Date(m.createdAt).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </time>
-              </div>
-              <div className="markdown">
-                <Markdown
-                  skipHtml
-                  components={{
-                    img: () => null,
-                    a: (props) => (
-                      <a {...props} target="_blank" rel="noreferrer" />
-                    ),
-                  }}
-                >
-                  {m.text}
-                </Markdown>
-              </div>
-            </article>
-          ))}
-          {Object.entries(live)
-            .filter(([, text]) => text)
-            .map(([station, text]) => (
-              <article className="message assistant streaming" key={station}>
+    <div className="conversation-view">
+      <div
+        className="transcript-scroll"
+        ref={scroll}
+        tabIndex={0}
+        aria-label="Activity messages"
+        onScroll={() => {
+          const el = scroll.current;
+          if (!el) return;
+          following.current =
+            el.scrollHeight - el.scrollTop - el.clientHeight < 56;
+          if (following.current) setUnread(false);
+        }}
+      >
+        {latestRun && (
+          <details className="activity-run-details">
+            <summary>
+              Run details{" "}
+              <span>
+                {duration(latestRun.startedAt, latestRun.completedAt)}
+              </span>
+            </summary>
+            <ol>
+              {latestRun.runs?.map((run, index) => (
+                <li key={`${run.startedAt}-${index}`}>
+                  <div>
+                    <strong>{STATION_LABELS[run.station]}</strong>
+                    <span>{duration(run.startedAt, run.completedAt)}</span>
+                  </div>
+                  <small>
+                    {run.model || "Codex"}
+                    {run.effort ? ` · ${run.effort}` : ""} · {run.status}
+                  </small>
+                  {(run.toolCalls > 0 || run.retries > 0) && (
+                    <small>
+                      {run.toolCalls} tool{" "}
+                      {run.toolCalls === 1 ? "call" : "calls"}
+                      {run.retries > 0
+                        ? ` · ${run.retries} ${run.retries === 1 ? "retry" : "retries"}`
+                        : ""}
+                    </small>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </details>
+        )}
+        {!project?.messages.length && !Object.keys(live).length ? (
+          <Empty title="Every idea starts with a conversation.">
+            Describe what you want to make in the prompt below. The planner will
+            carry your intent to the right specialists.
+          </Empty>
+        ) : (
+          <div className="transcript">
+            {project?.messages.map((m) => (
+              <article key={m.id} className={`message ${m.role}`}>
                 <div className="message-byline">
                   <span>
-                    <span className="status-dot online pulse" />
-                    {STATION_LABELS[station as Station].toUpperCase()}
+                    {m.role === "user"
+                      ? "YOU"
+                      : m.role === "system"
+                        ? "STUDIO"
+                        : STATION_LABELS[m.station].toUpperCase()}
                   </span>
-                  <span>Working</span>
+                  <time>
+                    {new Date(m.createdAt).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </time>
                 </div>
                 <div className="markdown">
-                  <Markdown skipHtml components={{ img: () => null }}>
-                    {text}
+                  <Markdown
+                    skipHtml
+                    components={{
+                      img: () => null,
+                      a: (props) => (
+                        <a {...props} target="_blank" rel="noreferrer" />
+                      ),
+                    }}
+                  >
+                    {m.text}
                   </Markdown>
                 </div>
               </article>
             ))}
-        </div>
+            {Object.entries(live)
+              .filter(([, text]) => text)
+              .map(([station, text]) => (
+                <article className="message assistant streaming" key={station}>
+                  <div className="message-byline">
+                    <span>
+                      <span className="status-dot online pulse" />
+                      {STATION_LABELS[station as Station].toUpperCase()}
+                    </span>
+                    <span>Working</span>
+                  </div>
+                  <div className="markdown">
+                    <Markdown skipHtml components={{ img: () => null }}>
+                      {text}
+                    </Markdown>
+                  </div>
+                </article>
+              ))}
+          </div>
+        )}
+      </div>
+      {unread && (
+        <button
+          className="jump-to-latest"
+          onClick={() => {
+            jumpToLatest();
+            scroll.current?.focus({ preventScroll: true });
+          }}
+        >
+          <ArrowDownToLine size={14} /> Jump to latest
+        </button>
       )}
-      <div ref={end} />
-    </>
+    </div>
   );
 }
 export function PartsPanel({

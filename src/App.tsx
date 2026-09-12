@@ -19,19 +19,12 @@ import {
   Compass,
   Cpu,
   Expand,
-  FileCode2,
   FolderOpen,
   History,
   Layers3,
   Loader2,
-  Maximize,
-  Minus,
-  ZoomIn,
-  ZoomOut,
   MessageSquare,
   PanelBottom,
-  Plus,
-  RotateCcw,
   Settings2,
   Sparkles,
   Square,
@@ -39,6 +32,7 @@ import {
 } from "lucide-react";
 import type {
   ApprovalRequest,
+  ConceptPreview,
   Artifact,
   ModelOption,
   Project,
@@ -48,15 +42,15 @@ import type {
   StudioPreferences,
 } from "../shared/types";
 import { api } from "./api";
+import { teamRoutes } from "../shared/routing";
 import {
   getPrimaryAssembly,
   getCurrentArtifacts,
   getDomainRevisions,
 } from "../shared/artifacts";
-import { HoloMark, Tray } from "./ui";
+import { ActivityAside, HoloMark, QuickSwitcher, Tray } from "./ui";
 import { SceneEvidence } from "./SceneEvidence";
 import {
-  BUILD_LABELS,
   ConversationPanel,
   ExportPanel,
   FilePanel,
@@ -109,7 +103,6 @@ type Panel =
   | "projects"
   | "settings"
   | "intent"
-  | "conversation"
   | "parts"
   | "files"
   | "history"
@@ -168,16 +161,17 @@ export default function App() {
       localStorage.getItem("holo.reduced") === "true" ||
       matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
-  const [compact, setCompact] = useState(
-    () => localStorage.getItem("holo.compact") !== "false",
+  const [activityOpen, setActivityOpen] = useState(
+    () => localStorage.getItem("holo.activity-open") === "true",
   );
+  const [previews, setPreviews] = useState<Record<string, ConceptPreview>>({});
+  const optionsRef = useRef<HTMLButtonElement>(null);
   const [dockHeight, setDockHeight] = useState(64);
   const dockRef = useRef<HTMLDivElement>(null);
   const [exploded, setExploded] = useState(false),
     [flat, setFlat] = useState(false),
     [selectedPart, setSelectedPart] = useState<string | null>(null),
-    [resetKey, setResetKey] = useState(0),
-    [zoomKey, setZoomKey] = useState(0);
+    [resetKey, setResetKey] = useState(0);
   const [artifact, setArtifact] = useState<Artifact | null>(null),
     [modelSelection, setModelSelection] = useState<{
       id: string;
@@ -199,7 +193,6 @@ export default function App() {
   const projectRef = useRef(project);
   projectRef.current = project;
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const liveRef = useRef<HTMLDivElement>(null);
   const closePanel = useCallback(() => setPanel(null), []);
   const busy = !!project?.changes.some(
     (c) => c.status === "running" || c.status === "queued",
@@ -212,7 +205,6 @@ export default function App() {
       )
     : [];
   const current = STATION_INFO[station];
-  const currentAgent = project?.agents[station];
   const absorb = useCallback((p: Project) => {
     setProjects((old) =>
       [p, ...old.filter((x) => x.id !== p.id)].sort((a, b) =>
@@ -247,7 +239,6 @@ export default function App() {
         if (prefs.model !== undefined) setModel(prefs.model);
         if (prefs.effort !== undefined) setEffort(prefs.effort);
         if (prefs.reducedMotion !== undefined) setReduced(prefs.reducedMotion);
-        if (prefs.compactMode !== undefined) setCompact(prefs.compactMode);
         setPreferencesReady(true);
         if (saved) {
           const p = ps.find((p) => p.id === saved);
@@ -275,7 +266,14 @@ export default function App() {
     events.onmessage = (e) => {
       try {
         const event = JSON.parse(e.data) as StudioEvent;
-        if (event.type === "project") {
+        if (event.type === "preview") {
+          setPreviews((old) => {
+            const next = { ...old };
+            if (event.preview) next[event.projectId] = event.preview;
+            else delete next[event.projectId];
+            return next;
+          });
+        } else if (event.type === "project") {
           absorb(event.project);
           if (
             projectRef.current?.id === event.project.id &&
@@ -355,7 +353,7 @@ export default function App() {
     model,
     effort,
     reducedMotion: reduced,
-    compactMode: compact,
+    compactMode: true,
   };
   useEffect(() => {
     if (!preferencesReady) return;
@@ -367,7 +365,7 @@ export default function App() {
         );
     }, 150);
     return () => clearTimeout(timer);
-  }, [preferencesReady, project?.id, drafts, model, effort, reduced, compact]);
+  }, [preferencesReady, project?.id, drafts, model, effort, reduced]);
   useEffect(() => {
     if (!preferencesReady) return;
     const persist = () =>
@@ -381,8 +379,8 @@ export default function App() {
     return () => window.removeEventListener("pagehide", persist);
   }, [preferencesReady]);
   useEffect(() => {
-    localStorage.setItem("holo.compact", String(compact));
-  }, [compact]);
+    localStorage.setItem("holo.activity-open", String(activityOpen));
+  }, [activityOpen]);
   useEffect(() => {
     const el = dockRef.current;
     if (!el) return;
@@ -514,7 +512,11 @@ export default function App() {
         projectRef.current = p;
         absorb(p);
       }
-      await api.send(p.id, draft.trim(), station, model, effort);
+      const executionEffort = teamRoutes(models, model || undefined, effort)
+        .design.effort;
+      if (executionEffort && executionEffort !== effort)
+        setEffort(executionEffort);
+      await api.send(p.id, draft.trim(), station, model, executionEffort);
       setDrafts((old) => ({ ...old, [project?.id || "new"]: "", [p!.id]: "" }));
       setLive({});
       setActivity({});
@@ -615,8 +617,19 @@ export default function App() {
     setResetKey((k) => k + 1);
   };
   const CurrentIcon = current.icon;
+  const preview =
+    project &&
+    !effectiveArtifactUrl &&
+    project.scene.kind === "plasma" &&
+    project.changes.some(
+      (c) => c.id === previews[project.id]?.jobId && c.status === "running",
+    )
+      ? previews[project.id]
+      : undefined;
   const isPlasma =
-    (!project || project.scene.kind === "plasma") && !effectiveArtifactUrl;
+    (!project || project.scene.kind === "plasma") &&
+    !effectiveArtifactUrl &&
+    !preview;
   const workingStation = working[0];
   const workStatus = workingStation
     ? project?.agents[workingStation]?.status === "waiting"
@@ -624,11 +637,10 @@ export default function App() {
       : activity[workingStation] || project?.agents[workingStation]?.summary
     : "Your request is queued.";
   const titles: Record<Exclude<Panel, null>, string> = {
-    controls: "Studio controls",
+    controls: "Studio options",
     projects: "Your projects",
     settings: "Settings",
     intent: "Project intent",
-    conversation: "Activity",
     parts: "What’s inside.",
     files: "Project files",
     history: "Revision history",
@@ -636,81 +648,12 @@ export default function App() {
     file: artifact?.name || "Artifact",
     help: "Navigation",
   };
-  const perspectives = (close: boolean) => (
-    <nav
-      className="stations"
-      role="tablist"
-      aria-label="Perspectives around your idea"
-    >
-      {STATIONS.map((s, i) => {
-        const Icon = STATION_INFO[s].icon;
-        return (
-          <button
-            key={s}
-            role="tab"
-            aria-selected={station === s}
-            tabIndex={station === s ? 0 : -1}
-            className={`station-button ${station === s ? "selected" : ""}`}
-            onClick={() => {
-              setStation(s);
-              if (close) setPanel(null);
-            }}
-            onKeyDown={(e) => {
-              if (["ArrowRight", "ArrowLeft", "Home", "End"].includes(e.key)) {
-                e.preventDefault();
-                const nextIndex =
-                  e.key === "Home"
-                    ? 0
-                    : e.key === "End"
-                      ? 3
-                      : (i + (e.key === "ArrowRight" ? 1 : 3)) % 4;
-                setStation(STATIONS[nextIndex]);
-                (
-                  e.currentTarget.parentElement?.children[
-                    nextIndex
-                  ] as HTMLElement
-                )?.focus();
-              }
-            }}
-          >
-            <Icon size={17} strokeWidth={1.55} />
-            <span>{STATION_LABELS[s]}</span>
-            <kbd>{i + 1}</kbd>
-            {project?.agents[s]?.status === "working" && (
-              <span className="working-indicator" />
-            )}
-          </button>
-        );
-      })}
-    </nav>
-  );
   const viewAction = (action: () => void) => {
     action();
     if (panel === "controls") setPanel(null);
   };
   const viewControls = (
     <div className="view-controls" role="group" aria-label="Object controls">
-      <button
-        onClick={() => viewAction(() => setZoomKey((k) => k + 1))}
-        aria-label="Zoom in"
-        title="Zoom in"
-      >
-        <ZoomIn size={17} />
-      </button>
-      <button
-        onClick={() => viewAction(() => setZoomKey((k) => k - 1))}
-        aria-label="Zoom out"
-        title="Zoom out"
-      >
-        <ZoomOut size={17} />
-      </button>
-      <button
-        onClick={() => viewAction(() => setResetKey((k) => k + 1))}
-        aria-label="Reset view"
-        title="Reset view (R)"
-      >
-        <RotateCcw size={17} />
-      </button>
       {primaryAssembly && visibleModel?.id !== primaryAssembly.id && (
         <button onClick={() => selectModel(primaryAssembly.id)}>
           <Box size={15} />
@@ -743,10 +686,24 @@ export default function App() {
   );
   return (
     <main
-      className={`studio station-${station} ${compact ? "minimal-studio" : "expanded-studio"} ${panel ? "has-tray" : ""}`}
+      className={`studio station-${station} minimal-studio ${panel ? "has-tray" : ""} ${activityOpen ? "has-activity" : ""}`}
       style={{ "--dock-height": `${dockHeight}px` } as CSSProperties}
     >
       <div className="native-drag-region" />
+      <button
+        className="project-identity"
+        onClick={() => setPanel("projects")}
+        aria-label={`Holo — open projects. ${project?.name || "New idea"}`}
+        aria-haspopup="dialog"
+        aria-expanded={panel === "projects"}
+        aria-controls="studio-panel"
+        title={project?.name || "New idea"}
+      >
+        <HoloMark size={24} />
+        <span>{project?.name || "New idea"}</span>
+        <ChevronDown size={12} />
+      </button>
+
       <div className="stage">
         <SceneBoundary>
           <Suspense
@@ -758,13 +715,13 @@ export default function App() {
           >
             <StudioScene
               station={station}
-              scene={project?.scene || EMPTY_SCENE}
+              scene={preview?.scene || project?.scene || EMPTY_SCENE}
               exploded={!effectiveArtifactUrl && exploded}
               flat={!effectiveArtifactUrl && flat}
               selectedPart={selectedPart}
               onSelectPart={setSelectedPart}
               resetKey={resetKey}
-              zoomKey={zoomKey}
+              zoomKey={0}
               reducedMotion={reduced}
               busy={busy}
               artifactUrl={effectiveArtifactUrl}
@@ -773,7 +730,18 @@ export default function App() {
         </SceneBoundary>
       </div>
       <div className="stage-vignette" />
-      {project && !isPlasma && (station !== "planning" || !compact) && (
+      {preview && (
+        <div
+          className="draft-preview-label"
+          role="status"
+          title="A provisional visual sketch. The design agent is still creating the project model."
+        >
+          <Sparkles size={13} />{" "}
+          {preview.stage === "sketch" ? "First sketch" : "Concept study"}
+          <span>Provisional</span>
+        </div>
+      )}
+      {project && !isPlasma && !preview && station !== "planning" && (
         <SceneEvidence
           project={project}
           station={station}
@@ -840,10 +808,12 @@ export default function App() {
               </div>
             </div>
           ))}
-        {busy && workStatus && (
+        {busy && workStatus && !activityOpen && (
           <button
             className="work-activity"
-            onClick={() => setPanel("conversation")}
+            onClick={() => setActivityOpen(true)}
+            aria-expanded={activityOpen}
+            aria-controls="studio-activity"
             aria-label="Follow the work"
             title={workStatus}
           >
@@ -857,53 +827,8 @@ export default function App() {
             <MessageSquare size={13} />
           </button>
         )}
-        <div
-          className={`cockpit ${compact ? "compact" : "expanded"}`}
-          ref={dockRef}
-        >
-          {!compact && (
-            <div className="expanded-controls">
-              {perspectives(false)}
-              <div className="expanded-actions">
-                {viewControls}
-                <button
-                  className="context-button"
-                  onClick={() => setPanel("conversation")}
-                >
-                  <MessageSquare size={15} />
-                  Activity
-                </button>
-                {project && (
-                  <button className="context-button" onClick={openContext}>
-                    <FileCode2 size={15} />
-                    {current.detail}
-                  </button>
-                )}
-                <button
-                  className="context-button"
-                  onClick={() => setCompact(true)}
-                  aria-label="Use minimal cockpit"
-                >
-                  <Minus size={15} />
-                  Minimize
-                </button>
-              </div>
-            </div>
-          )}
+        <div className="cockpit compact" ref={dockRef}>
           <div className="dock-row">
-            <button
-              className="dock-project"
-              onClick={() => setPanel("projects")}
-              aria-label={`Holo — open projects. ${project?.name || "New idea"}`}
-              aria-haspopup="dialog"
-              aria-expanded={panel === "projects"}
-              aria-controls="studio-panel"
-              title={project?.name || "New idea"}
-            >
-              <HoloMark size={24} />
-              <span>{project?.name || "New idea"}</span>
-              <ChevronDown size={12} />
-            </button>
             <div className="composer">
               <textarea
                 ref={inputRef}
@@ -946,18 +871,31 @@ export default function App() {
                 )}
               </button>
             </div>
+            <QuickSwitcher
+              value={station}
+              onChange={setStation}
+              closeSignal={panel || project?.id}
+              options={STATIONS.map((s) => {
+                const Icon = STATION_INFO[s].icon;
+                return {
+                  value: s,
+                  label: STATION_LABELS[s],
+                  icon: <Icon size={19} strokeWidth={1.6} />,
+                  working: project?.agents[s]?.status === "working",
+                };
+              })}
+            />
             <button
-              className="dock-controls"
+              ref={optionsRef}
+              className="dock-options"
               onClick={() => setPanel("controls")}
-              aria-label={`Studio controls — ${STATION_LABELS[station]} perspective`}
+              aria-label="Studio options"
               aria-haspopup="dialog"
               aria-expanded={panel === "controls"}
               aria-controls="studio-panel"
-              title="Perspectives & controls"
+              title="Studio options"
             >
-              <CurrentIcon size={19} strokeWidth={1.6} />
-              <span>{STATION_LABELS[station]}</span>
-              <ChevronDown size={12} />
+              <Settings2 size={19} strokeWidth={1.6} />
               {(!serviceReady || !runtime?.authenticated) && (
                 <span className="connection-indicator" />
               )}
@@ -965,6 +903,22 @@ export default function App() {
           </div>
         </div>
       </div>
+      {activityOpen && (
+        <ActivityAside
+          busy={busy}
+          status={workStatus}
+          onClose={() => {
+            setActivityOpen(false);
+            optionsRef.current?.focus();
+          }}
+        >
+          <ConversationPanel
+            key={project?.id || "new"}
+            project={project}
+            live={live}
+          />
+        </ActivityAside>
+      )}
       {panel && (
         <Tray
           title={titles[panel]}
@@ -978,7 +932,7 @@ export default function App() {
                   : "HOLO / THE CONVERSATION"
           }
           onClose={closePanel}
-          wide={panel === "file" || panel === "conversation"}
+          wide={panel === "file"}
           footer={
             panel === "export" && project ? (
               <>
@@ -1007,58 +961,66 @@ export default function App() {
         >
           {panel === "controls" && (
             <div className="controls-panel">
-              {perspectives(true)}
-              {project && (
-                <>
-                  <div className="control-section">
-                    <div className="section-label">MODEL</div>
-                    {currentModels.length > 0 && (
-                      <label className="model-picker">
-                        <span className="sr-only">Displayed model</span>
-                        <select
-                          aria-label="Displayed model"
-                          value={visibleModel?.id || ""}
-                          onChange={(e) => selectModel(e.target.value)}
-                        >
-                          {visibleModel &&
-                            !currentModels.some(
-                              (a) => a.id === visibleModel.id,
-                            ) && (
-                              <option value={visibleModel.id}>
-                                {visibleModel.name} · History
+              {project &&
+                (currentModels.length > 0 || visibleModel || !isPlasma) && (
+                  <>
+                    <div className="control-section">
+                      <div className="section-label">MODEL</div>
+                      {currentModels.length > 0 && (
+                        <label className="model-picker">
+                          <span className="sr-only">Displayed model</span>
+                          <select
+                            aria-label="Displayed model"
+                            value={visibleModel?.id || ""}
+                            onChange={(e) => selectModel(e.target.value)}
+                          >
+                            {visibleModel &&
+                              !currentModels.some(
+                                (a) => a.id === visibleModel.id,
+                              ) && (
+                                <option value={visibleModel.id}>
+                                  {visibleModel.name} · History
+                                </option>
+                              )}
+                            {currentModels.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.id === primaryAssembly?.id
+                                  ? "Assembly · "
+                                  : a.role === "part"
+                                    ? "Part · "
+                                    : "Model · "}
+                                {a.name}
                               </option>
-                            )}
-                          {currentModels.map((a) => (
-                            <option key={a.id} value={a.id}>
-                              {a.id === primaryAssembly?.id
-                                ? "Assembly · "
-                                : a.role === "part"
-                                  ? "Part · "
-                                  : "Model · "}
-                              {a.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-                    {viewControls}
-                    {visibleModel && (
-                      <button
-                        className="model-file-link"
-                        onClick={() => showFile(visibleModel)}
-                      >
-                        <Box size={14} />
-                        {visibleModel.name}
-                        <span>r{visibleModel.revision}</span>
-                      </button>
-                    )}
-                  </div>
-                </>
-              )}
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {viewControls}
+                      {visibleModel && (
+                        <button
+                          className="model-file-link"
+                          onClick={() => showFile(visibleModel)}
+                        >
+                          <Box size={14} />
+                          {visibleModel.name}
+                          <span>r{visibleModel.revision}</span>
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
               <div className="control-section control-links">
-                <button onClick={() => setPanel("conversation")}>
+                <button
+                  aria-pressed={activityOpen}
+                  aria-controls="studio-activity"
+                  onClick={() => {
+                    setActivityOpen((value) => !value);
+                    setPanel(null);
+                  }}
+                >
                   <MessageSquare size={17} />
                   <span>Activity</span>
+                  {activityOpen && <Check size={15} />}
                 </button>
                 {project && (
                   <>
@@ -1093,17 +1055,6 @@ export default function App() {
                 </button>
               </div>
               <div className="control-preferences">
-                <button
-                  className="compact-toggle"
-                  role="switch"
-                  aria-checked={compact}
-                  onClick={() => setCompact((v) => !v)}
-                >
-                  <span>Minimal cockpit</span>
-                  <span className={`toggle-track ${compact ? "on" : ""}`}>
-                    <span />
-                  </span>
-                </button>
                 <button
                   className="intelligence-label"
                   onClick={() => setPanel("settings")}
@@ -1147,9 +1098,6 @@ export default function App() {
           )}
           {panel === "intent" && project && (
             <IntentPanel key={project.id} project={project} onUpdate={update} />
-          )}
-          {panel === "conversation" && (
-            <ConversationPanel project={project} live={live} />
           )}
           {panel === "parts" && project && (
             <PartsPanel

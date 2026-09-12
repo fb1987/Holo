@@ -31,23 +31,24 @@ If your npm version requires approval of dependency installation scripts, approv
 
 ## Your first session
 
-1. Open the **Holo project menu** at the left of the prompt to begin a new idea or choose a wheel/enclosure example. These are explicitly conceptual examples with proposed components and example behavior source.
-2. Open the perspective control at the right of the prompt, or use keys **1–4**, to visit the four perspectives. Drag to orbit, scroll to zoom, right-drag to pan. Zoom buttons and **R** reset are available.
+1. Open the **Holo project menu** at the top left of the studio to begin a new idea or choose a wheel/enclosure example. These are explicitly conceptual examples with proposed components and example behavior source.
+2. Open the perspective control at the right of the prompt, or use keys **1–4**, to visit the four perspectives. Drag to orbit, scroll to zoom, right-drag to pan. Press **R** to reset the view.
 3. Open **Intent & decisions** to name the idea and choose DIY, some assembly, or finished supplier assembly.
-4. Open **Settings → Connect Codex** from the perspective control. Holo discovers your installed Codex and account. Select the available model and thinking depth you want.
+4. Open **Settings → Connect Codex** from the separate **Studio options** button beside the perspective chooser. Holo discovers your installed Codex and account. Select the available model and thinking depth you want.
 5. Describe a change and press **⌘ Enter** or the arrow. For example: “Design a small USB desk controller with two buttons. I want to assemble it without soldering. Create an editable enclosure model and explain what still needs engineering review.”
 6. Inspect the ongoing work or stop it from the prompt. The strategist routes the request, specialists produce their artifacts, and recommendations return to the strategist for a bounded correction round.
 7. Open **Build package** to export the intent, BOM, available artifacts, assembly and supplier briefs, and a revision manifest with file hashes.
 
-Prompt drafts are saved separately for each idea. The selected idea, drafts, model, thinking depth, motion preference, and minimal cockpit setting are also saved in the local workshop, so they survive native app restarts. Closing a panel never discards a draft. Requests that need extra tool permissions appear as explicit action approvals.
+Prompt drafts are saved separately for each idea. The selected idea, drafts, model, thinking depth, and motion preference are also saved in the local workshop, so they survive native app restarts. Closing a panel never discards a draft. Requests that need extra tool permissions appear as explicit action approvals.
 
-The default cockpit is a single row. Its perspective control contains model selection, navigation, activity, project files, export, and settings. Switch off **Minimal cockpit** there to keep perspective tabs and quick actions visible. Generated designs open on their designated assembly; individual models and printable parts can be selected deliberately. Files separates each perspective’s current deliverables from history, and exports include a current-deliverables index. Existing projects are migrated without regenerating geometry.
+The cockpit is a single compact row. The perspective chooser only switches workstations. Its adjacent Studio options button contains model/part selection, Activity, project files, history, export, and settings. Activity is an optional right-side panel that remains open while sending prompts and switching perspectives. Generated designs open on their designated assembly; individual models and printable parts can be selected deliberately. Files separates each perspective’s current deliverables from history, and exports include a current-deliverables index. Existing projects are migrated without regenerating geometry.
 
 ## What is real today
 
 - A full-screen Three.js stage with procedural plasma, camera transitions, selectable parts, explosion, conceptual board view, and GLB/STL viewing.
 - Local projects with goals, constraints, decisions, revision history, and immutable artifact snapshots.
-- Codex app-server authentication, live model discovery, high reasoning by default where supported, persistent specialist sessions, streamed activity, cancellation, and approvals.
+- Codex app-server authentication, live model discovery, automatic Astra/high planning and Luna execution at the selected depth, persistent specialist sessions, streamed activity, cancellation, and approvals. Explicit model selection overrides all four perspectives.
+- Provisional, ephemeral Luna sketches for empty projects: a quick first silhouette during planning, then a refined concept during design. These never become saved CAD or exported deliverables. Measured example latencies and limits are in [the generation review](docs/generation-latency-review.md).
 - Planner-first routing, domain ownership, stale-result rejection, and a bounded specialist recommendation cycle.
 - Actual tool execution in specialist workspaces. Agents can write source, documents, meshes, and engineering files using available tools.
 - Source inspection and software behavior evidence in the stage.

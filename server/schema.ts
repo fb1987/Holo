@@ -112,7 +112,7 @@ export const outputSchema = z
 export type AgentOutput = z.infer<typeof outputSchema>;
 // All fields are required; nullable fields represent no change. This works with
 // strict structured-output models and is validated again before any mutation.
-function codexCompatibleSchema(value: unknown): any {
+export function codexCompatibleSchema(value: unknown): any {
   if (Array.isArray(value)) return value.map(codexCompatibleSchema);
   if (value && typeof value === "object") {
     const node = Object.fromEntries(

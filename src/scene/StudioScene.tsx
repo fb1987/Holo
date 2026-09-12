@@ -784,7 +784,14 @@ function CustomPart({
           <cylinderGeometry args={[dims[0] / 2, dims[0] / 2, dims[1], 40]} />
         )}
         {part.shape === "torus" && (
-          <torusGeometry args={[dims[0] / 2, dims[1] / 2, 16, 64]} />
+          <torusGeometry
+            args={[
+              Math.max(0.001, (dims[0] - dims[1]) / 2),
+              dims[1] / 2,
+              16,
+              64,
+            ]}
+          />
         )}
         <ShellMaterial
           color={part.color || props.color}
@@ -1089,7 +1096,7 @@ export default function StudioScene(props: StudioSceneProps) {
   return (
     <SceneBoundary>
       <Canvas
-        aria-label="Interactive 3D model. Drag to orbit; use the zoom and reset controls below."
+        aria-label="Interactive 3D model. Drag to orbit, scroll or pinch to zoom, and press R to reset."
         role="img"
         dpr={[1, 1.7]}
         camera={{ position: [0.86, 1.75, 7.15], fov: 37, near: 0.05, far: 60 }}

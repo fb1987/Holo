@@ -1,5 +1,184 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Check, ChevronDown, X } from "lucide-react";
+export function QuickSwitcher<T extends string>({
+  value,
+  options,
+  onChange,
+  closeSignal,
+}: {
+  value: T;
+  options: { value: T; label: string; icon: ReactNode; working?: boolean }[];
+  onChange: (value: T) => void;
+  closeSignal: unknown;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const active = options.find((option) => option.value === value)!;
+  useEffect(() => setOpen(false), [closeSignal]);
+  useEffect(() => {
+    if (!open) return;
+    root.current
+      ?.querySelector<HTMLButtonElement>('[aria-checked="true"]')
+      ?.focus();
+    const outside = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", outside, true);
+    return () => document.removeEventListener("pointerdown", outside, true);
+  }, [open]);
+  const close = () => {
+    setOpen(false);
+    trigger.current?.focus();
+  };
+  return (
+    <div
+      className="perspective-switcher"
+      ref={root}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node))
+          setOpen(false);
+      }}
+    >
+      <button
+        ref={trigger}
+        className="dock-controls"
+        aria-label={`Change perspective — ${active.label}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls="perspective-menu"
+        title="Change perspective"
+        onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (["ArrowDown", "ArrowUp"].includes(event.key)) {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
+      >
+        {active.icon}
+        <span>{active.label}</span>
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div
+          id="perspective-menu"
+          className="perspective-menu"
+          role="menu"
+          aria-label="Perspectives around your idea"
+          onKeyDown={(event) => {
+            const buttons = Array.from(
+              event.currentTarget.querySelectorAll<HTMLButtonElement>("button"),
+            );
+            const index = buttons.indexOf(
+              document.activeElement as HTMLButtonElement,
+            );
+            if (
+              [
+                "ArrowDown",
+                "ArrowRight",
+                "ArrowUp",
+                "ArrowLeft",
+                "Home",
+                "End",
+              ].includes(event.key)
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              const next =
+                event.key === "Home"
+                  ? 0
+                  : event.key === "End"
+                    ? buttons.length - 1
+                    : (index +
+                        (["ArrowDown", "ArrowRight"].includes(event.key)
+                          ? 1
+                          : buttons.length - 1)) %
+                      buttons.length;
+              buttons[next]?.focus();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              close();
+            } else if (event.key === "Tab") {
+              close();
+            }
+          }}
+        >
+          {options.map((option, index) => (
+            <button
+              key={option.value}
+              role="menuitemradio"
+              aria-checked={value === option.value}
+              tabIndex={-1}
+              className={value === option.value ? "selected" : ""}
+              onClick={() => {
+                onChange(option.value);
+                close();
+              }}
+            >
+              {option.icon}
+              <span>{option.label}</span>
+              {option.working && (
+                <span className="working-indicator" aria-label="Working" />
+              )}
+              {value === option.value ? (
+                <Check size={14} />
+              ) : (
+                <kbd>{index + 1}</kbd>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ActivityAside({
+  children,
+  status,
+  busy,
+  onClose,
+}: {
+  children: ReactNode;
+  status?: string;
+  busy: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <aside
+      id="studio-activity"
+      className="activity-aside"
+      aria-labelledby="activity-title"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <header className="activity-heading">
+        <h2 id="activity-title">Activity</h2>
+        <button
+          className="icon-button"
+          onClick={onClose}
+          aria-label="Close activity"
+        >
+          <X size={18} />
+        </button>
+      </header>
+      {busy && status && (
+        <div className="activity-status" role="status">
+          <span className="status-dot online pulse" />
+          {status}
+        </div>
+      )}
+      {children}
+    </aside>
+  );
+}
 export function HoloMark({ size = 26 }: { size?: number }) {
   return (
     <svg

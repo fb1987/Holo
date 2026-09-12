@@ -75,6 +75,28 @@ export interface ChangeRequest {
   toRevision?: number;
   createdAt: string;
   error?: string;
+  startedAt?: string;
+  completedAt?: string;
+  runs?: AgentRunRecord[];
+}
+export interface AgentRunRecord {
+  station: Station;
+  model?: string;
+  effort?: string;
+  startedAt: string;
+  completedAt?: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  toolCalls: number;
+  retries: number;
+}
+/** Transient visual hypothesis. Never a deliverable or canonical revision. */
+export interface ConceptPreview {
+  projectId: string;
+  jobId: string;
+  stage: "sketch" | "concept";
+  scene: SceneSpec;
+  model: string;
+  elapsedMs: number;
 }
 export interface AgentState {
   station: Station;
@@ -135,6 +157,7 @@ export interface ApprovalRequest {
 }
 export type StudioEvent =
   | { type: "project"; project: Project }
+  | { type: "preview"; projectId: string; preview: ConceptPreview | null }
   | { type: "delta"; projectId: string; station: Station; text: string }
   | { type: "status"; projectId: string; station: Station; status: string }
   | { type: "approval"; approval: ApprovalRequest }

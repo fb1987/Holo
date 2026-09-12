@@ -11,7 +11,11 @@ import { StudioEngine } from "../server/engine.js";
 import { exportEntries, bomCsv } from "../server/export.js";
 import type { AgentRunOptions, AgentRuntime } from "../server/codex.js";
 import { StructuredOutputStallError } from "../server/codex.js";
-import type { RuntimeStatus, StudioEvent } from "../shared/types.js";
+import type {
+  RuntimeStatus,
+  StudioEvent,
+  ModelOption,
+} from "../shared/types.js";
 import {
   getCurrentArtifacts,
   getPrimaryAssembly,
@@ -36,6 +40,7 @@ const result = (extra: Record<string, unknown> = {}) =>
 class FakeRuntime extends EventEmitter implements AgentRuntime {
   calls: AgentRunOptions[] = [];
   responses: string[] = [];
+  availableModels: ModelOption[] = [];
   runner?: (options: AgentRunOptions) => Promise<string>;
   status(): RuntimeStatus {
     return {
@@ -49,7 +54,7 @@ class FakeRuntime extends EventEmitter implements AgentRuntime {
     return this.status();
   }
   async models() {
-    return [];
+    return this.availableModels;
   }
   async login() {
     return {};
@@ -664,4 +669,72 @@ test("studio preferences survive service restart on an independently assigned po
     body: JSON.stringify({ credential: "not allowed" }),
   });
   assert.equal(invalid.status, 400);
+});
+
+test("automatic routing and previews execute together without writing drafts into canonical state", async (t) => {
+  const store = new ProjectStore(await temp(t));
+  await store.init();
+  const p = await store.create(),
+    runtime = new FakeRuntime();
+  runtime.availableModels = ["gpt-6-astra", "gpt-5.6-luna"].map((id) => ({
+    id,
+    displayName: id,
+    isDefault: id === "gpt-6-astra",
+    supportedReasoningEfforts: [
+      { reasoningEffort: "low" },
+      { reasoningEffort: "high" },
+    ],
+  }));
+  const events: StudioEvent[] = [];
+  runtime.runner = async (options) => {
+    if (options.readOnly)
+      return JSON.stringify({
+        dimensions: [100, 100, 100],
+        color: "#abcdef",
+        parts: [
+          {
+            name: "Draft",
+            shape: "box",
+            position: [0, 0, 0],
+            rotation: [0, 0, 0],
+            size: [100, 100, 100],
+            color: "#abcdef",
+          },
+        ],
+      });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    return path.basename(options.cwd) === "planning"
+      ? result({ affected: ["design"] })
+      : result();
+  };
+  const engine = new StudioEngine(store, runtime, (e) => events.push(e));
+  await engine.enqueue(p.id, {
+    text: "Make a box",
+    station: "design",
+    effort: "low",
+  });
+  await settled(store, p.id, engine);
+  const canonical = runtime.calls.filter((c) => !c.readOnly);
+  assert.deepEqual(
+    canonical.map((c) => [path.basename(c.cwd), c.model, c.effort]),
+    [
+      ["planning", "gpt-6-astra", "high"],
+      ["design", "gpt-5.6-luna", "low"],
+    ],
+  );
+  assert.ok(
+    events.some((e) => e.type === "preview" && e.preview?.stage === "sketch"),
+  );
+  assert.ok(
+    events.some((e) => e.type === "preview" && e.preview?.stage === "concept"),
+  );
+  assert.equal(p.scene.kind, "plasma");
+  assert.equal(p.revision, 2);
+  assert.equal(p.artifacts.length, 0);
+  assert.deepEqual(engine.conceptPreviews(), []);
+  assert.ok(p.changes[0].startedAt && p.changes[0].completedAt);
+  assert.equal(p.changes[0].runs?.length, 2);
+  assert.ok(
+    p.changes[0].runs?.every((r) => r.status === "completed" && r.completedAt),
+  );
 });

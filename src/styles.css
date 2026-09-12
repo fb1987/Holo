@@ -2016,8 +2016,8 @@ small {
   margin-right: 6px;
 }
 
-/* The bottom dock is the only persistent chrome. Its measured height also
-   positions every sheet when a long prompt or expanded controls grow it. */
+/* The measured prompt height keeps temporary sheets and the activity panel
+   clear of longer drafts. Project identity stays in its own upper corner. */
 .studio {
   --dock-bottom: 22px;
 }
@@ -2116,23 +2116,6 @@ small {
   height: 46px;
   border-radius: 10px;
 }
-.expanded-controls {
-  padding: 2px 5px 11px;
-  margin-bottom: 7px;
-  border-bottom: 1px solid var(--line);
-}
-.expanded-controls .stations {
-  padding: 0 0 9px;
-}
-.expanded-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.expanded-actions > :last-child {
-  margin-left: auto;
-}
 .studio .tray-shade {
   padding-bottom: calc(var(--dock-height, 62px) + var(--dock-bottom) + 16px);
 }
@@ -2213,41 +2196,6 @@ small {
   flex-direction: column;
   gap: 18px;
 }
-.compact-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  text-align: left;
-  font-size: 12px;
-  min-height: 36px;
-  padding: 0 2px;
-}
-.toggle-track {
-  display: block;
-  width: 32px;
-  height: 19px;
-  border: 1px solid #93b5bd40;
-  border-radius: 20px;
-  background: #070d15;
-  padding: 3px;
-}
-.toggle-track > span {
-  display: block;
-  height: 11px;
-  width: 11px;
-  border-radius: 50%;
-  background: #7a909c;
-  transition: transform 0.18s;
-}
-.toggle-track.on {
-  background: #8cb6aa24;
-  border-color: #b4d9cb66;
-}
-.toggle-track.on > span {
-  background: #bdded2;
-  transform: translateX(12px);
-}
 .control-preferences .intelligence-label {
   max-width: none;
   padding: 3px 2px;
@@ -2309,19 +2257,10 @@ small {
     gap: 6px;
     font-size: 11px;
   }
-  .expanded-actions .context-button {
-    padding-inline: 8px;
-  }
 }
 @media (max-height: 750px) {
   .studio {
     --dock-bottom: 12px;
-  }
-  .expanded-controls .stations {
-    padding: 0 0 7px;
-  }
-  .expanded-controls .station-button {
-    padding-block: 9px;
   }
 }
 @media (max-width: 480px) {
@@ -2368,4 +2307,296 @@ small {
 }
 .file-explanation {
   margin-top: 20px;
+}
+
+/* Spatial controls: identity, perspective, and workshop options are independent. */
+.project-identity {
+  position: absolute;
+  z-index: 21;
+  top: 49px;
+  left: 22px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(360px, calc(100% - 44px));
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid #adc9d11b;
+  border-radius: 12px;
+  background: #0c161eb3;
+  backdrop-filter: blur(20px);
+  color: #c3d9d3;
+  -webkit-app-region: no-drag;
+}
+.project-identity > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.project-identity:hover {
+  background: #14232ded;
+  border-color: #adc9d13d;
+}
+.dock-options {
+  height: 46px;
+  width: 46px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  position: relative;
+  color: #a6bfca;
+  border: 1px solid transparent;
+  border-radius: 10px;
+}
+.dock-options:hover,
+.dock-options[aria-expanded="true"] {
+  background: #b9d6df0a;
+  border-color: var(--line);
+}
+.perspective-switcher {
+  position: relative;
+  flex-shrink: 0;
+}
+.perspective-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 17px);
+  min-width: 208px;
+  padding: 6px;
+  border: 1px solid #adc9d134;
+  border-radius: 13px;
+  background: #101d27f5;
+  backdrop-filter: blur(28px);
+  box-shadow: 0 12px 50px #0008;
+  animation: appear 0.15s ease;
+}
+.perspective-menu > button {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 11px;
+  border-radius: 8px;
+  color: #a9bec6;
+  font-size: 12px;
+  text-align: left;
+}
+.perspective-menu > button > span:first-of-type {
+  flex: 1;
+}
+.perspective-menu > button:hover,
+.perspective-menu > button:focus-visible {
+  background: #b9d6df0d;
+}
+.perspective-menu > button.selected {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.065);
+}
+.control-links > button[aria-pressed="true"] {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.07);
+}
+.control-links > button[aria-pressed] > span {
+  flex: 1;
+}
+.controls-panel > .control-section:first-child,
+.controls-panel > .control-links:first-child {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+.activity-aside {
+  position: absolute;
+  z-index: 9;
+  top: 49px;
+  right: 22px;
+  bottom: calc(var(--dock-height, 62px) + var(--dock-bottom) + 16px);
+  width: clamp(300px, 29vw, 390px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #adc9d12b;
+  border-radius: 16px;
+  background: #0b1721ed;
+  backdrop-filter: blur(24px);
+  box-shadow: 0 12px 55px #0004;
+  animation: appear 0.2s ease;
+}
+.activity-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 13px 10px 20px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.activity-heading h2 {
+  font-size: 15px;
+  letter-spacing: -0.15px;
+}
+.activity-heading .icon-button {
+  min-height: 36px;
+  min-width: 36px;
+}
+.activity-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #b7d0cf;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  max-height: 84px;
+  overflow: auto;
+  flex-shrink: 0;
+}
+.activity-status .status-dot {
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+.conversation-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.transcript-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 20px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #45616c66 transparent;
+  scroll-behavior: auto;
+}
+.transcript-scroll:focus-visible {
+  outline: 1px solid rgba(var(--accent-rgb), 0.6);
+  outline-offset: -3px;
+}
+.activity-aside .message {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+}
+.activity-aside .markdown {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.activity-aside .empty-state {
+  padding: 30px 0;
+}
+.activity-aside .empty-state h3 {
+  font-size: 17px;
+}
+.activity-aside .empty-state p {
+  font-size: 12px;
+}
+.jump-to-latest {
+  position: absolute;
+  bottom: 13px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  min-height: 38px;
+  padding: 8px 13px;
+  background: #1b343f;
+  color: #dbedeb;
+  border: 1px solid #8fbdc24d;
+  border-radius: 20px;
+  box-shadow: 0 5px 20px #0007;
+  font-size: 11px;
+}
+.activity-run-details {
+  margin-bottom: 24px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 11px 12px;
+  color: #abc2cb;
+  font-size: 11px;
+}
+.activity-run-details summary {
+  cursor: pointer;
+}
+.activity-run-details summary > span {
+  float: right;
+  color: #86a4b1;
+}
+.activity-run-details ol {
+  list-style: none;
+  margin: 15px 0 0;
+  padding: 0;
+}
+.activity-run-details li + li {
+  border-top: 1px solid var(--line);
+  margin-top: 11px;
+  padding-top: 11px;
+}
+.activity-run-details li > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.activity-run-details strong {
+  font-weight: 500;
+  color: #c7d9d9;
+}
+.activity-run-details small {
+  display: block;
+  color: #879fac;
+  font-size: 10px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.draft-preview-label {
+  position: absolute;
+  z-index: 4;
+  left: 30px;
+  bottom: calc(var(--dock-height, 62px) + var(--dock-bottom) + 62px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid #aac6d21c;
+  border-radius: 8px;
+  background: #0d1a23b8;
+  backdrop-filter: blur(16px);
+  color: #adc8ce;
+  font-size: 11px;
+  pointer-events: none;
+}
+.draft-preview-label span {
+  color: #7e98a6;
+  font-size: 10px;
+}
+@media (max-width: 900px) {
+  .activity-aside {
+    width: 285px;
+    right: 14px;
+  }
+  .project-identity {
+    left: 14px;
+    max-width: min(300px, calc(100% - 28px));
+  }
+  .activity-heading {
+    padding-left: 16px;
+  }
+  .transcript-scroll,
+  .activity-status {
+    padding-inline: 16px;
+  }
+}
+@media (max-width: 480px) {
+  .activity-aside {
+    top: 104px;
+    width: calc(100% - 28px);
+  }
 }

@@ -97,6 +97,55 @@ test("server-initiated approval is held until the client replies", async (t) => 
   assert.equal(approval, true);
   assert.equal(output, '{"ok":true}');
 });
+test("disposable previews use read-only permissions and release their subscription", async (t) => {
+  const { codex, dir } = await runtime(t);
+  const calls: Array<{ method: string; params: any }> = [];
+  const request = codex.request.bind(codex);
+  codex.request = async (method, params, timeout) => {
+    calls.push({ method, params });
+    return method === "thread/unsubscribe"
+      ? {}
+      : request(method, params, timeout);
+  };
+  assert.equal(
+    await codex.run(options(dir, { readOnly: true, ephemeral: true })),
+    '{"ok":true}',
+  );
+  const thread = calls.find((c) => c.method === "thread/start")!.params;
+  const turn = calls.find((c) => c.method === "turn/start")!.params;
+  assert.equal(thread.ephemeral, true);
+  assert.equal(thread.sandbox, "read-only");
+  assert.equal(thread.approvalPolicy, "never");
+  assert.deepEqual(turn.sandboxPolicy, { type: "readOnly" });
+  assert.equal(turn.approvalPolicy, "never");
+  assert.ok(calls.some((c) => c.method === "thread/unsubscribe"));
+});
+test("cancelling during thread creation never starts a turn", async (t) => {
+  const { codex, dir } = await runtime(t);
+  const controller = new AbortController();
+  const calls: string[] = [];
+  const request = codex.request.bind(codex);
+  codex.request = async (method, params, timeout) => {
+    calls.push(method);
+    if (method === "thread/unsubscribe") return {};
+    const result = await request(method, params, timeout);
+    if (method === "thread/start") controller.abort();
+    return result;
+  };
+  await assert.rejects(
+    () =>
+      codex.run(
+        options(dir, {
+          readOnly: true,
+          ephemeral: true,
+          signal: controller.signal,
+        }),
+      ),
+    /cancelled/,
+  );
+  assert.ok(!calls.includes("turn/start"));
+  assert.ok(calls.includes("thread/unsubscribe"));
+});
 test("cancellation rejects active turn and disconnect cannot leave a hanging run", async (t) => {
   const { codex, dir } = await runtime(t),
     ctrl = new AbortController();
