@@ -73,6 +73,9 @@ export function Tray({
       previous?.focus();
     };
   }, [onClose]);
+  useEffect(() => {
+    ref.current?.focus();
+  }, [title]);
   return (
     <div
       className="tray-shade"
@@ -81,6 +84,7 @@ export function Tray({
       }}
     >
       <section
+        id="studio-panel"
         ref={ref}
         tabIndex={-1}
         role="dialog"

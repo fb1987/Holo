@@ -13,6 +13,7 @@ const preferencesSchema = z
     model: z.string().max(120).optional(),
     effort: z.string().max(30).optional(),
     reducedMotion: z.boolean().optional(),
+    compactMode: z.boolean().optional(),
   })
   .strict()
   .refine(

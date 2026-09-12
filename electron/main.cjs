@@ -34,7 +34,7 @@ if (!gotLock) {
               accelerator: "Cmd+,",
               click: () =>
                 mainWindow?.webContents.executeJavaScript(
-                  "document.querySelector('[aria-label=\"Studio settings\"]')?.click()",
+                  "window.dispatchEvent(new Event('holo:settings'))",
                 ),
             },
             { type: "separator" },

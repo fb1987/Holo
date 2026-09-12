@@ -1,8 +1,15 @@
 import archiver from "archiver";
 import { promises as fs } from "node:fs";
 import type { Response } from "express";
-import type { Project } from "../shared/types.js";
+import type { Artifact, Project, Station } from "../shared/types.js";
 import { ProjectStore, sha256 } from "./store.js";
+import {
+  getCurrentArtifacts,
+  getDomainRevisions,
+  getDomainState,
+  getPrimaryAssembly,
+  inferArtifactRole,
+} from "../shared/artifacts.js";
 
 export function csvCell(value: unknown) {
   let text = value === undefined || value === null ? "" : String(value);
@@ -41,6 +48,36 @@ export function bomCsv(p: Project) {
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
 export async function exportEntries(store: ProjectStore, p: Project) {
+  const currentArtifacts = getCurrentArtifacts(p);
+  const currentIds = new Set(currentArtifacts.map((artifact) => artifact.id));
+  const domainRevisions = getDomainRevisions(p);
+  const primaryAssembly = getPrimaryAssembly(p);
+  const domains = Object.fromEntries(
+    Object.entries(getDomainState(p)).map(([domain, state]) => [
+      domain,
+      {
+        revision: state.revision,
+        files: currentArtifacts
+          .filter((artifact) => artifact.domain === domain)
+          .map((artifact) => artifact.path),
+        inputRevisions: state.inputRevisions ?? null,
+        changedInputs: state.inputRevisions
+          ? Object.entries(state.inputRevisions)
+              .filter(
+                ([input, revision]) =>
+                  input !== domain &&
+                  domainRevisions[input as Station] !== revision,
+              )
+              .map(([input, revision]) => ({
+                domain: input,
+                recordedRevision: revision,
+                currentRevision: domainRevisions[input as Station] ?? null,
+              }))
+          : null,
+        compatibility: "not-assessed",
+      },
+    ]),
+  );
   const entries: Array<{ name: string; data: Buffer | string }> = [];
   const add = (name: string, data: string | Buffer) =>
     entries.push({ name, data });
@@ -56,6 +93,19 @@ export async function exportEntries(store: ProjectStore, p: Project) {
   };
   add("project.json", JSON.stringify(project, null, 2));
   add("BOM.csv", bomCsv(p));
+  add(
+    "DELIVERABLES.md",
+    `# Current deliverables\n\nProject revision ${p.revision}. Each domain has its own current set; a later software revision does not make the design historical. Current means the latest recorded deliverables, not validated compatibility, physical fit, or manufacturing readiness.\n\n${primaryAssembly ? `Primary assembly: [${primaryAssembly.name}](${encodeURI(primaryAssembly.path)}).` : "No current generated assembly is registered."}\n\n${Object.entries(
+      domains,
+    )
+      .map(
+        ([domain, state]) =>
+          `## ${domain} · r${state.revision}\n\n${state.files.length ? state.files.map((file) => `- [${file.split("/").at(-1)}](${encodeURI(file)})`).join("\n") : "No current files."}\n\n${state.inputRevisions === null ? "Generation input revisions were not recorded for this legacy set. Compatibility is unassessed." : state.changedInputs?.length ? "Some input domains have changed since generation. Review the changedInputs record in MANIFEST.json; this is not an automatic incompatibility finding." : "Input revision context is recorded in MANIFEST.json. Compatibility remains unassessed."}`,
+      )
+      .join(
+        "\n\n",
+      )}\n\n## History\n\n${p.artifacts.length - currentArtifacts.length} earlier artifacts are retained at their original paths for traceability and marked historical in MANIFEST.json. Use the current files listed above for the handoff; historical files are not additional current deliverables.\n`,
+  );
   add(
     "INTENT.md",
     `# ${p.name}\n\nRevision ${p.revision} • Build preference: ${p.buildMode}\n\n${p.description || "Description not yet established."}\n\n## Goals\n\n${p.goals.map((x) => "- " + x).join("\n") || "No goals recorded yet."}\n\n## Constraints\n\n${p.constraints.map((x) => "- " + x).join("\n") || "No constraints recorded yet."}\n\n## Decisions\n\n${p.decisions.map((d) => `- ${d.text} — ${d.reason} (r${d.revision})`).join("\n") || "No decisions recorded yet."}\n`,
@@ -80,6 +130,10 @@ export async function exportEntries(store: ProjectStore, p: Project) {
     bytes: number;
     sourceRevision?: number;
     currentRevision?: boolean;
+    domain?: Station;
+    role?: Artifact["role"];
+    status?: "current" | "historical";
+    primaryAssembly?: boolean;
   }> = [];
   for (const artifact of p.artifacts) {
     const file = await store.readArtifact(p.id, artifact.path);
@@ -90,7 +144,11 @@ export async function exportEntries(store: ProjectStore, p: Project) {
       sha256: sha256(data),
       bytes: data.length,
       sourceRevision: artifact.revision,
-      currentRevision: artifact.revision === p.revision,
+      currentRevision: currentIds.has(artifact.id),
+      domain: artifact.domain,
+      role: inferArtifactRole(artifact),
+      status: currentIds.has(artifact.id) ? "current" : "historical",
+      primaryAssembly: artifact.id === primaryAssembly?.id,
     });
   }
   for (const entry of entries.filter((e) => !e.name.startsWith("artifacts/")))
@@ -104,13 +162,17 @@ export async function exportEntries(store: ProjectStore, p: Project) {
     JSON.stringify(
       {
         format: "holo-build-package",
-        version: 1,
+        version: 2,
         projectId: p.id,
         revision: p.revision,
         readiness: p.readiness,
         generatedAt: new Date().toISOString(),
+        primaryAssembly: primaryAssembly?.path ?? null,
+        domains,
+        currentRevisionMeaning:
+          "Membership in the current deliverable set for its domain; not equality with the global project revision or engineering approval.",
         validation:
-          "Conceptual and agent-generated outputs require engineering and supplier review. Older artifact revisions are retained and must be checked against current intent.",
+          "Conceptual and agent-generated outputs require engineering and supplier review. Current domain sets are indexed in DELIVERABLES.md; historical artifacts are retained for traceability. Input snapshots record available context, not declared dependency requirements or validated compatibility.",
         files: manifest,
       },
       null,

@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type CSSProperties,
 } from "react";
 import {
   ArrowDownToLine,
@@ -47,6 +48,11 @@ import type {
   StudioPreferences,
 } from "../shared/types";
 import { api } from "./api";
+import {
+  getPrimaryAssembly,
+  getCurrentArtifacts,
+  getDomainRevisions,
+} from "../shared/artifacts";
 import { HoloMark, Tray } from "./ui";
 import { SceneEvidence } from "./SceneEvidence";
 import {
@@ -99,6 +105,7 @@ const EMPTY_SCENE = {
   parts: [],
 };
 type Panel =
+  | "controls"
   | "projects"
   | "settings"
   | "intent"
@@ -161,14 +168,23 @@ export default function App() {
       localStorage.getItem("holo.reduced") === "true" ||
       matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
+  const [compact, setCompact] = useState(
+    () => localStorage.getItem("holo.compact") !== "false",
+  );
+  const [dockHeight, setDockHeight] = useState(64);
+  const dockRef = useRef<HTMLDivElement>(null);
   const [exploded, setExploded] = useState(false),
     [flat, setFlat] = useState(false),
     [selectedPart, setSelectedPart] = useState<string | null>(null),
     [resetKey, setResetKey] = useState(0),
     [zoomKey, setZoomKey] = useState(0);
   const [artifact, setArtifact] = useState<Artifact | null>(null),
-    [artifactUrl, setArtifactUrl] = useState<string | undefined>(),
-    [showConcept, setShowConcept] = useState(false),
+    [modelSelection, setModelSelection] = useState<{
+      id: string;
+      projectId: string;
+      primaryId?: string;
+      designRevision?: number;
+    } | null>(null),
     [pending, setPending] = useState(false),
     [connecting, setConnecting] = useState(false);
   const [error, setError] = useState(""),
@@ -231,6 +247,7 @@ export default function App() {
         if (prefs.model !== undefined) setModel(prefs.model);
         if (prefs.effort !== undefined) setEffort(prefs.effort);
         if (prefs.reducedMotion !== undefined) setReduced(prefs.reducedMotion);
+        if (prefs.compactMode !== undefined) setCompact(prefs.compactMode);
         setPreferencesReady(true);
         if (saved) {
           const p = ps.find((p) => p.id === saved);
@@ -338,6 +355,7 @@ export default function App() {
     model,
     effort,
     reducedMotion: reduced,
+    compactMode: compact,
   };
   useEffect(() => {
     if (!preferencesReady) return;
@@ -349,7 +367,7 @@ export default function App() {
         );
     }, 150);
     return () => clearTimeout(timer);
-  }, [preferencesReady, project?.id, drafts, model, effort, reduced]);
+  }, [preferencesReady, project?.id, drafts, model, effort, reduced, compact]);
   useEffect(() => {
     if (!preferencesReady) return;
     const persist = () =>
@@ -362,6 +380,23 @@ export default function App() {
     window.addEventListener("pagehide", persist);
     return () => window.removeEventListener("pagehide", persist);
   }, [preferencesReady]);
+  useEffect(() => {
+    localStorage.setItem("holo.compact", String(compact));
+  }, [compact]);
+  useEffect(() => {
+    const el = dockRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() =>
+      setDockHeight(el.getBoundingClientRect().height),
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    const settings = () => setPanel("settings");
+    window.addEventListener("holo:settings", settings);
+    return () => window.removeEventListener("holo:settings", settings);
+  }, []);
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(""), 4500);
@@ -404,8 +439,7 @@ export default function App() {
     setExploded(false);
     setFlat(false);
     setSelectedPart(null);
-    setArtifactUrl(undefined);
-    setShowConcept(false);
+    setModelSelection(null);
     setLive({});
     setActivity({});
     setError("");
@@ -552,16 +586,35 @@ export default function App() {
     setArtifact(a);
     setPanel("file");
   };
-  const sample = project?.source === "example";
-  const newestMesh = project?.artifacts
-    .filter((a) => /\.(glb|stl)$/i.test(a.path))
-    .at(-1);
-  const effectiveArtifactUrl = showConcept
-    ? undefined
-    : artifactUrl ||
-      (project && newestMesh
-        ? api.fileUrl(project.id, newestMesh.path)
-        : undefined);
+  const primaryAssembly = project ? getPrimaryAssembly(project) : undefined;
+  const selectedModel =
+    project &&
+    modelSelection?.projectId === project.id &&
+    modelSelection.primaryId === primaryAssembly?.id &&
+    modelSelection.designRevision === getDomainRevisions(project).design
+      ? project.artifacts.find((a) => a.id === modelSelection.id)
+      : undefined;
+  const visibleModel = selectedModel || primaryAssembly;
+  const effectiveArtifactUrl =
+    project && visibleModel
+      ? api.fileUrl(project.id, visibleModel.path)
+      : undefined;
+  const currentModels = project
+    ? getCurrentArtifacts(project).filter((a) => /\.(glb|stl)$/i.test(a.path))
+    : [];
+  const selectModel = (id: string) => {
+    if (!project) return;
+    setModelSelection({
+      id,
+      projectId: project.id,
+      primaryId: primaryAssembly?.id,
+      designRevision: getDomainRevisions(project).design,
+    });
+    setSelectedPart(null);
+    setPanel(null);
+    setResetKey((k) => k + 1);
+  };
+  const CurrentIcon = current.icon;
   const isPlasma =
     (!project || project.scene.kind === "plasma") && !effectiveArtifactUrl;
   const workingStation = working[0];
@@ -571,22 +624,128 @@ export default function App() {
       : activity[workingStation] || project?.agents[workingStation]?.summary
     : "Your request is queued.";
   const titles: Record<Exclude<Panel, null>, string> = {
-    projects: "Your ideas have a home.",
-    settings: "The intelligence in your studio.",
-    intent: "What this idea is here to do.",
-    conversation: "A conversation around the idea.",
+    controls: "Studio controls",
+    projects: "Your projects",
+    settings: "Settings",
+    intent: "Project intent",
+    conversation: "Activity",
     parts: "What’s inside.",
-    files:
-      station === "software"
-        ? "The logic behind the object."
-        : "The files taking shape.",
-    history: "How the idea has evolved.",
-    export: "From possibility to physical.",
+    files: "Project files",
+    history: "Revision history",
+    export: "Build package",
     file: artifact?.name || "Artifact",
-    help: "Find your way around.",
+    help: "Navigation",
   };
+  const perspectives = (close: boolean) => (
+    <nav
+      className="stations"
+      role="tablist"
+      aria-label="Perspectives around your idea"
+    >
+      {STATIONS.map((s, i) => {
+        const Icon = STATION_INFO[s].icon;
+        return (
+          <button
+            key={s}
+            role="tab"
+            aria-selected={station === s}
+            tabIndex={station === s ? 0 : -1}
+            className={`station-button ${station === s ? "selected" : ""}`}
+            onClick={() => {
+              setStation(s);
+              if (close) setPanel(null);
+            }}
+            onKeyDown={(e) => {
+              if (["ArrowRight", "ArrowLeft", "Home", "End"].includes(e.key)) {
+                e.preventDefault();
+                const nextIndex =
+                  e.key === "Home"
+                    ? 0
+                    : e.key === "End"
+                      ? 3
+                      : (i + (e.key === "ArrowRight" ? 1 : 3)) % 4;
+                setStation(STATIONS[nextIndex]);
+                (
+                  e.currentTarget.parentElement?.children[
+                    nextIndex
+                  ] as HTMLElement
+                )?.focus();
+              }
+            }}
+          >
+            <Icon size={17} strokeWidth={1.55} />
+            <span>{STATION_LABELS[s]}</span>
+            <kbd>{i + 1}</kbd>
+            {project?.agents[s]?.status === "working" && (
+              <span className="working-indicator" />
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  );
+  const viewAction = (action: () => void) => {
+    action();
+    if (panel === "controls") setPanel(null);
+  };
+  const viewControls = (
+    <div className="view-controls" role="group" aria-label="Object controls">
+      <button
+        onClick={() => viewAction(() => setZoomKey((k) => k + 1))}
+        aria-label="Zoom in"
+        title="Zoom in"
+      >
+        <ZoomIn size={17} />
+      </button>
+      <button
+        onClick={() => viewAction(() => setZoomKey((k) => k - 1))}
+        aria-label="Zoom out"
+        title="Zoom out"
+      >
+        <ZoomOut size={17} />
+      </button>
+      <button
+        onClick={() => viewAction(() => setResetKey((k) => k + 1))}
+        aria-label="Reset view"
+        title="Reset view (R)"
+      >
+        <RotateCcw size={17} />
+      </button>
+      {primaryAssembly && visibleModel?.id !== primaryAssembly.id && (
+        <button onClick={() => selectModel(primaryAssembly.id)}>
+          <Box size={15} />
+          Assembly
+        </button>
+      )}
+      {!isPlasma && !effectiveArtifactUrl && (
+        <>
+          <button
+            className={exploded ? "active" : ""}
+            aria-pressed={exploded}
+            onClick={() => viewAction(() => setExploded((v) => !v))}
+          >
+            <Layers3 size={15} />
+            Explode
+          </button>
+          {station === "electronics" && !project?.scene.parts.length && (
+            <button
+              className={flat ? "active" : ""}
+              aria-pressed={flat}
+              onClick={() => viewAction(() => setFlat((v) => !v))}
+            >
+              <PanelBottom size={15} />
+              Board view
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
   return (
-    <main className={`studio station-${station} ${panel ? "has-tray" : ""}`}>
+    <main
+      className={`studio station-${station} ${compact ? "minimal-studio" : "expanded-studio"} ${panel ? "has-tray" : ""}`}
+      style={{ "--dock-height": `${dockHeight}px` } as CSSProperties}
+    >
       <div className="native-drag-region" />
       <div className="stage">
         <SceneBoundary>
@@ -614,59 +773,7 @@ export default function App() {
         </SceneBoundary>
       </div>
       <div className="stage-vignette" />
-      <div
-        className={`idea-caption ${isPlasma ? "initial" : ""}`}
-        key={project?.id || "welcome"}
-      >
-        <div className="eyebrow">
-          <span className="caption-line" />
-          {isPlasma
-            ? "A SPACE FOR POSSIBILITY"
-            : sample
-              ? "EXAMPLE CONCEPT · MAKE IT YOURS"
-              : `YOUR IDEA · REVISION ${project?.revision}`}
-          <span className="caption-line" />
-        </div>
-        <h1>
-          {isPlasma && (!project || project.name === "Untitled invention")
-            ? "What would you like to make?"
-            : project?.name}
-        </h1>
-        <p>
-          {isPlasma
-            ? "Explore the shape. Work through the details. Get it made."
-            : current.caption}
-        </p>
-      </div>
-      {!isPlasma && (
-        <div className="scene-context">
-          <span className="context-rule" />
-          <span>
-            {effectiveArtifactUrl
-              ? "GENERATED MODEL · REVIEW GEOMETRY"
-              : station === "electronics"
-                ? flat
-                  ? "CONCEPTUAL BOARD"
-                  : "LOOKING WITHIN"
-                : station === "software"
-                  ? "PHYSICAL FORM / DIGITAL BEHAVIOUR"
-                  : station === "design"
-                    ? exploded
-                      ? "ASSEMBLY EXPLORATION"
-                      : "FORM & MATERIAL"
-                    : "ONE IDEA. EVERY PERSPECTIVE."}
-          </span>
-          {project && !effectiveArtifactUrl && (
-            <span className="mono">
-              PRODUCT ENVELOPE
-              <br />
-              {project.scene.width} × {project.scene.height} ×{" "}
-              {project.scene.depth} mm
-            </span>
-          )}
-        </div>
-      )}
-      {project && !isPlasma && (
+      {project && !isPlasma && (station !== "planning" || !compact) && (
         <SceneEvidence
           project={project}
           station={station}
@@ -734,7 +841,12 @@ export default function App() {
             </div>
           ))}
         {busy && workStatus && (
-          <div className="work-activity" role="status">
+          <button
+            className="work-activity"
+            onClick={() => setPanel("conversation")}
+            aria-label="Follow the work"
+            title={workStatus}
+          >
             <Loader2 size={13} className="spin" />
             <span>
               <strong>
@@ -742,149 +854,56 @@ export default function App() {
               </strong>{" "}
               {workStatus}
             </span>
-          </div>
+            <MessageSquare size={13} />
+          </button>
         )}
-        <div className="stage-tools">
-          {!project && (
-            <div className="starter-actions">
-              <button
-                onClick={() => create("wheel")}
-                disabled={pending || loading}
-              >
-                <span className="tiny-wheel">◉</span>Explore the wheel{" "}
-                <span>↗</span>
-              </button>
-              <button
-                onClick={() => create("enclosure")}
-                disabled={pending || loading}
-              >
-                <Box size={15} />
-                Start with an enclosure <span>↗</span>
-              </button>
-            </div>
-          )}
-          {project && (
-            <>
-              <div className="view-controls" aria-label="Object controls">
+        <div
+          className={`cockpit ${compact ? "compact" : "expanded"}`}
+          ref={dockRef}
+        >
+          {!compact && (
+            <div className="expanded-controls">
+              {perspectives(false)}
+              <div className="expanded-actions">
+                {viewControls}
                 <button
-                  onClick={() => setZoomKey((k) => k + 1)}
-                  aria-label="Zoom in"
-                  title="Zoom in"
+                  className="context-button"
+                  onClick={() => setPanel("conversation")}
                 >
-                  <ZoomIn size={15} />
+                  <MessageSquare size={15} />
+                  Activity
                 </button>
-                <button
-                  onClick={() => setZoomKey((k) => k - 1)}
-                  aria-label="Zoom out"
-                  title="Zoom out"
-                >
-                  <ZoomOut size={15} />
-                </button>
-                <button
-                  onClick={() => setResetKey((k) => k + 1)}
-                  title="Reset view (R)"
-                  aria-label="Reset view"
-                >
-                  <RotateCcw size={15} />
-                </button>
-                {(newestMesh || artifactUrl) && (
-                  <button
-                    onClick={() => setShowConcept((v) => !v)}
-                    aria-pressed={showConcept}
-                    className={showConcept ? "active" : ""}
-                  >
-                    <Box size={15} />
-                    <span>Concept preview</span>
+                {project && (
+                  <button className="context-button" onClick={openContext}>
+                    <FileCode2 size={15} />
+                    {current.detail}
                   </button>
                 )}
-                {!isPlasma && !effectiveArtifactUrl && (
-                  <>
-                    <button
-                      className={exploded ? "active" : ""}
-                      onClick={() => setExploded((v) => !v)}
-                      aria-pressed={exploded}
-                    >
-                      <Layers3 size={15} />
-                      <span>Explode</span>
-                    </button>
-                    {station === "electronics" && (
-                      <button
-                        className={flat ? "active" : ""}
-                        onClick={() => setFlat((v) => !v)}
-                        aria-pressed={flat}
-                      >
-                        <PanelBottom size={15} />
-                        <span>Board view</span>
-                      </button>
-                    )}
-                  </>
-                )}
                 <button
-                  onClick={() => setPanel("help")}
-                  aria-label="View navigation help"
+                  className="context-button"
+                  onClick={() => setCompact(true)}
+                  aria-label="Use minimal cockpit"
                 >
-                  <Expand size={15} />
+                  <Minus size={15} />
+                  Minimize
                 </button>
               </div>
-              <button className="context-button" onClick={openContext}>
-                {station === "planning" ? (
-                  <Compass size={15} />
-                ) : station === "electronics" ? (
-                  <Cpu size={15} />
-                ) : (
-                  <FileCode2 size={15} />
-                )}{" "}
-                {current.detail}
-                <ChevronDown size={13} />
-              </button>
-            </>
+            </div>
           )}
-        </div>
-        <div className="cockpit">
-          <nav
-            className="stations"
-            role="tablist"
-            aria-label="Perspectives around your idea"
-          >
-            {STATIONS.map((s, i) => {
-              const Icon = STATION_INFO[s].icon;
-              return (
-                <button
-                  key={s}
-                  role="tab"
-                  aria-selected={station === s}
-                  tabIndex={station === s ? 0 : -1}
-                  className={`station-button ${station === s ? "selected" : ""}`}
-                  onClick={() => {
-                    setStation(s);
-                    setPanel(null);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-                      e.preventDefault();
-                      const next =
-                        STATIONS[(i + (e.key === "ArrowRight" ? 1 : 3)) % 4];
-                      setStation(next);
-                      (
-                        e.currentTarget.parentElement?.children[
-                          STATIONS.indexOf(next)
-                        ] as HTMLElement
-                      )?.focus();
-                    }
-                  }}
-                >
-                  <span className="station-orbit-dot" />
-                  <Icon size={17} strokeWidth={1.55} />
-                  <span>{STATION_LABELS[s]}</span>
-                  <kbd>{i + 1}</kbd>
-                  {project?.agents[s]?.status === "working" && (
-                    <span className="working-indicator" />
-                  )}
-                </button>
-              );
-            })}
-          </nav>
-          <div className="composer-shell">
+          <div className="dock-row">
+            <button
+              className="dock-project"
+              onClick={() => setPanel("projects")}
+              aria-label={`Holo — open projects. ${project?.name || "New idea"}`}
+              aria-haspopup="dialog"
+              aria-expanded={panel === "projects"}
+              aria-controls="studio-panel"
+              title={project?.name || "New idea"}
+            >
+              <HoloMark size={24} />
+              <span>{project?.name || "New idea"}</span>
+              <ChevronDown size={12} />
+            </button>
             <div className="composer">
               <textarea
                 ref={inputRef}
@@ -909,6 +928,13 @@ export default function App() {
                   (!draft.trim() || pending || loading || !serviceReady)
                 }
                 onClick={busy ? cancel : submit}
+                title={
+                  !serviceReady
+                    ? "Local workshop disconnected"
+                    : busy
+                      ? "Stop current work"
+                      : "Send to planner (⌘ Enter)"
+                }
                 aria-label={busy ? "Stop current work" : "Send to planner"}
               >
                 {pending ? (
@@ -920,132 +946,23 @@ export default function App() {
                 )}
               </button>
             </div>
-            <div className="composer-foot">
-              <button
-                className="intelligence-label"
-                onClick={() => setPanel("settings")}
-              >
-                <span
-                  className={`status-dot ${runtime?.authenticated ? "online" : ""}`}
-                />
-                {runtime?.authenticated
-                  ? models.find((m) => m.id === model)?.displayName || "Codex"
-                  : "Connect Codex"}
-                <ChevronDown size={11} />
-              </button>
-              <span className="routing-note">
-                {station === "planning"
-                  ? "An idea begins with intent."
-                  : "Your planner keeps every perspective aligned."}
-              </span>
-              <kbd>⌘ ↵</kbd>
-            </div>
-          </div>
-          <div className="studio-footer">
             <button
-              className="brand"
-              onClick={() => setPanel("projects")}
-              aria-label="Holo — open projects"
+              className="dock-controls"
+              onClick={() => setPanel("controls")}
+              aria-label={`Studio controls — ${STATION_LABELS[station]} perspective`}
+              aria-haspopup="dialog"
+              aria-expanded={panel === "controls"}
+              aria-controls="studio-panel"
+              title="Perspectives & controls"
             >
-              <HoloMark size={23} />
-              <span>HOLO</span>
-            </button>
-            <span className="footer-divider" />
-            <button
-              className="project-switch"
-              onClick={() => setPanel("projects")}
-            >
-              <span>{project?.name || "A new possibility"}</span>
+              <CurrentIcon size={19} strokeWidth={1.6} />
+              <span>{STATION_LABELS[station]}</span>
               <ChevronDown size={12} />
-            </button>
-            {project && (
-              <span className="revision-label">r{project.revision}</span>
-            )}
-            <div className="footer-spacer" />
-            <button
-              className={
-                panel === "conversation"
-                  ? "footer-button active"
-                  : "footer-button"
-              }
-              onClick={() => setPanel("conversation")}
-              aria-label="Open conversation"
-              title="Conversation"
-            >
-              <MessageSquare size={16} />
-              {project?.messages.length ? (
-                <span>{project.messages.length}</span>
-              ) : null}
-            </button>
-            {project && (
-              <>
-                <button
-                  className="footer-button"
-                  onClick={() => setPanel("history")}
-                  aria-label="Open revision history"
-                  title="Revision history"
-                >
-                  <History size={16} />
-                </button>
-                <button
-                  className="footer-button export-button"
-                  aria-label="Build package"
-                  onClick={() => setPanel("export")}
-                >
-                  <ArrowDownToLine size={16} />
-                  <span>Build package</span>
-                </button>
-              </>
-            )}
-            <button
-              className="footer-button"
-              onClick={() => setPanel("settings")}
-              aria-label="Studio settings"
-              title="Studio settings"
-            >
-              <Settings2 size={16} />
+              {(!serviceReady || !runtime?.authenticated) && (
+                <span className="connection-indicator" />
+              )}
             </button>
           </div>
-        </div>
-        <div className="studio-status" aria-live="polite">
-          <span>
-            {busy ? (
-              <>
-                <span className="status-dot online pulse" />
-                {working.length
-                  ? `${working.map((s) => STATION_LABELS[s]).join(" + ")} working`
-                  : "Request queued"}
-                <span className="status-separator">·</span>Showing saved
-                revision {project?.revision}
-              </>
-            ) : (
-              <>
-                <span
-                  className={`status-dot ${serviceReady ? "online" : ""}`}
-                />
-                {loading
-                  ? "Opening your studio…"
-                  : serviceReady
-                    ? "LOCAL STUDIO"
-                    : "WORKSHOP DISCONNECTED"}
-                {project && (
-                  <>
-                    <span className="status-separator">/</span>
-                    {BUILD_LABELS[project.buildMode]}
-                  </>
-                )}
-              </>
-            )}
-          </span>
-          {busy ? (
-            <button onClick={() => setPanel("conversation")}>
-              Follow the work <ArrowUp size={11} />
-            </button>
-          ) : (
-            <span className="navigation-hint">
-              DRAG TO ORBIT <span>·</span> SCROLL TO EXPLORE
-            </span>
-          )}
         </div>
       </div>
       {panel && (
@@ -1088,6 +1005,123 @@ export default function App() {
             ) : undefined
           }
         >
+          {panel === "controls" && (
+            <div className="controls-panel">
+              {perspectives(true)}
+              {project && (
+                <>
+                  <div className="control-section">
+                    <div className="section-label">MODEL</div>
+                    {currentModels.length > 0 && (
+                      <label className="model-picker">
+                        <span className="sr-only">Displayed model</span>
+                        <select
+                          aria-label="Displayed model"
+                          value={visibleModel?.id || ""}
+                          onChange={(e) => selectModel(e.target.value)}
+                        >
+                          {visibleModel &&
+                            !currentModels.some(
+                              (a) => a.id === visibleModel.id,
+                            ) && (
+                              <option value={visibleModel.id}>
+                                {visibleModel.name} · History
+                              </option>
+                            )}
+                          {currentModels.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.id === primaryAssembly?.id
+                                ? "Assembly · "
+                                : a.role === "part"
+                                  ? "Part · "
+                                  : "Model · "}
+                              {a.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    {viewControls}
+                    {visibleModel && (
+                      <button
+                        className="model-file-link"
+                        onClick={() => showFile(visibleModel)}
+                      >
+                        <Box size={14} />
+                        {visibleModel.name}
+                        <span>r{visibleModel.revision}</span>
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+              <div className="control-section control-links">
+                <button onClick={() => setPanel("conversation")}>
+                  <MessageSquare size={17} />
+                  <span>Activity</span>
+                </button>
+                {project && (
+                  <>
+                    <button onClick={openContext}>
+                      <CurrentIcon size={17} />
+                      <span>{current.detail}</span>
+                    </button>
+                    <button onClick={() => setPanel("files")}>
+                      <FolderOpen size={17} />
+                      <span>All files</span>
+                    </button>
+                    <button onClick={() => setPanel("history")}>
+                      <History size={17} />
+                      <span>Revision history</span>
+                    </button>
+                    <button onClick={() => setPanel("export")}>
+                      <ArrowDownToLine size={17} />
+                      <span>Build package</span>
+                    </button>
+                  </>
+                )}
+                <button
+                  onClick={() => setPanel("settings")}
+                  aria-label="Studio settings"
+                >
+                  <Settings2 size={17} />
+                  <span>Settings</span>
+                </button>
+                <button onClick={() => setPanel("help")}>
+                  <Expand size={17} />
+                  <span>Navigation</span>
+                </button>
+              </div>
+              <div className="control-preferences">
+                <button
+                  className="compact-toggle"
+                  role="switch"
+                  aria-checked={compact}
+                  onClick={() => setCompact((v) => !v)}
+                >
+                  <span>Minimal cockpit</span>
+                  <span className={`toggle-track ${compact ? "on" : ""}`}>
+                    <span />
+                  </span>
+                </button>
+                <button
+                  className="intelligence-label"
+                  onClick={() => setPanel("settings")}
+                >
+                  <span
+                    className={`status-dot ${serviceReady && runtime?.authenticated ? "online" : ""}`}
+                  />
+                  {!serviceReady
+                    ? "Workshop disconnected"
+                    : runtime?.authenticated
+                      ? models.find((m) => m.id === model)?.displayName ||
+                        "Codex connected"
+                      : "Connect Codex"}
+                  <ChevronDown size={11} />
+                </button>
+              </div>
+            </div>
+          )}
           {panel === "projects" && (
             <ProjectsPanel
               projects={projects}
@@ -1128,14 +1162,18 @@ export default function App() {
             />
           )}
           {panel === "files" && project && (
-            <FilesPanel project={project} onSelect={showFile} />
+            <FilesPanel
+              key={project.id}
+              project={project}
+              onSelect={showFile}
+            />
           )}
           {panel === "file" && project && artifact && (
             <FilePanel
               project={project}
               artifact={artifact}
-              onPreview={(url) => {
-                setArtifactUrl(url);
+              onPreview={() => {
+                selectModel(artifact.id);
                 setPanel(null);
                 setStation("design");
                 setResetKey((k) => k + 1);

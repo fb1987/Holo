@@ -27,6 +27,7 @@ import type {
   Artifact,
 } from "../shared/types";
 import { api } from "./api";
+import { getCurrentArtifacts, getPrimaryAssembly } from "../shared/artifacts";
 import { Empty, Pill } from "./ui";
 export const BUILD_LABELS: Record<BuildMode, string> = {
   diy: "Build it myself",
@@ -512,10 +513,34 @@ export function FilesPanel({
   project: Project;
   onSelect: (a: Artifact) => void;
 }) {
+  const [history, setHistory] = useState(false);
+  const current = getCurrentArtifacts(project);
+  const currentIds = new Set(current.map((a) => a.id));
+  const historical = project.artifacts.filter((a) => !currentIds.has(a.id));
+  const files = history ? historical : current;
+  const primary = getPrimaryAssembly(project);
   return (
     <>
-      {project.artifacts.length ? (
-        project.artifacts.map((a) => (
+      {project.artifacts.length > 0 && (
+        <div className="file-filters" role="group" aria-label="File versions">
+          <button
+            aria-pressed={!history}
+            className={!history ? "active" : ""}
+            onClick={() => setHistory(false)}
+          >
+            Current files <span>{current.length}</span>
+          </button>
+          <button
+            aria-pressed={history}
+            className={history ? "active" : ""}
+            onClick={() => setHistory(true)}
+          >
+            History <span>{historical.length}</span>
+          </button>
+        </div>
+      )}
+      {files.length ? (
+        files.map((a) => (
           <button className="file-row" key={a.id} onClick={() => onSelect(a)}>
             <span className="file-icon">
               {a.kind === "code" ? (
@@ -528,7 +553,14 @@ export function FilesPanel({
             </span>
             <span>
               <strong>{a.name}</strong>
-              <small>{a.path}</small>
+              <small>
+                {a.id === primary?.id
+                  ? "Primary assembly · "
+                  : a.role === "part"
+                    ? "Part · "
+                    : ""}
+                {a.path}
+              </small>
             </span>
             <Pill>{STATION_LABELS[a.domain]}</Pill>
             <span className="mono">r{a.revision}</span>
@@ -536,15 +568,18 @@ export function FilesPanel({
           </button>
         ))
       ) : (
-        <Empty title="The work will live here.">
-          Generated CAD, board files, software, and documents appear with their
-          revision. Ask Holo to create a concrete artifact.
+        <Empty title={history ? "No earlier files" : "No current files"}>
+          {history
+            ? "Earlier deliverables will remain here as the project develops."
+            : "Ask Holo to generate design, electronics, or software files for this idea."}
         </Empty>
       )}
-      <p className="muted small">
-        The scene can show a conceptual model before engineering files exist.
-        Generated files remain available in your exported build package.
-      </p>
+      {current.length > 0 && !history && (
+        <p className="muted small file-explanation">
+          Latest deliverables for each perspective. Engineering readiness is
+          recorded separately.
+        </p>
+      )}
     </>
   );
 }
@@ -593,7 +628,10 @@ export function FilePanel({
     <>
       <div className="file-meta">
         <Pill>
-          {STATION_LABELS[artifact.domain]} · Revision {artifact.revision}
+          {getCurrentArtifacts(project).some((a) => a.id === artifact.id)
+            ? "Current"
+            : "History"}{" "}
+          · {STATION_LABELS[artifact.domain]} · r{artifact.revision}
         </Pill>
         <a className="secondary-button" href={url} download={artifact.name}>
           <ArrowDownToLine size={15} />
@@ -724,7 +762,7 @@ export function ExportPanel({
           ],
           [
             "Generated artifacts",
-            `${project.artifacts.length} files, linked to their revisions.`,
+            `${getCurrentArtifacts(project).length} current files across perspectives; ${project.artifacts.length - getCurrentArtifacts(project).length} earlier files retained as history.`,
           ],
           [
             "Assembly & supplier brief",
@@ -732,7 +770,7 @@ export function ExportPanel({
           ],
           [
             "Revision manifest",
-            "A record of exactly what this package contains.",
+            "Current deliverables by perspective, the primary assembly, and file hashes.",
           ],
         ].map(([title, detail]) => (
           <div key={title}>

@@ -12,6 +12,10 @@ import { exportEntries, bomCsv } from "../server/export.js";
 import type { AgentRunOptions, AgentRuntime } from "../server/codex.js";
 import { StructuredOutputStallError } from "../server/codex.js";
 import type { RuntimeStatus, StudioEvent } from "../shared/types.js";
+import {
+  getCurrentArtifacts,
+  getPrimaryAssembly,
+} from "../shared/artifacts.js";
 
 const result = (extra: Record<string, unknown> = {}) =>
   JSON.stringify({
@@ -66,12 +70,13 @@ async function temp(t: test.TestContext) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }
-async function settled(store: ProjectStore, id: string) {
+async function settled(store: ProjectStore, id: string, engine: StudioEngine) {
   for (let i = 0; i < 300; i++) {
     const p = store.get(id);
     if (
       p.changes.length &&
-      p.changes.every((c) => !["queued", "running"].includes(c.status))
+      p.changes.every((c) => !["queued", "running"].includes(c.status)) &&
+      !engine.isBusy(id)
     )
       return p;
     await new Promise((r) => setTimeout(r, 10));
@@ -137,7 +142,7 @@ test("all user intent enters planning, affected specialists run in sequence, thr
     text: "Make a desktop device",
     station: "software",
   });
-  await settled(store, p.id);
+  await settled(store, p.id, engine);
   assert.deepEqual(
     runtime.calls.map((c) => path.basename(c.cwd)),
     ["planning", "design", "software"],
@@ -153,7 +158,7 @@ test("all user intent enters planning, affected specialists run in sequence, thr
     text: "Explain the approach",
     station: "planning",
   });
-  await settled(store, p.id);
+  await settled(store, p.id, engine);
   assert.equal(runtime.calls[3].threadId, "thread-1");
   assert.ok(events.some((e) => e.type === "project"));
 });
@@ -175,7 +180,7 @@ test("cross-domain proposals get one planner arbitration and one bounded correct
   ];
   const engine = new StudioEngine(store, runtime, () => {});
   await engine.enqueue(p.id, { text: "Add a display", station: "electronics" });
-  await settled(store, p.id);
+  await settled(store, p.id, engine);
   assert.deepEqual(
     runtime.calls.map((c) => path.basename(c.cwd)),
     ["planning", "electronics", "planning", "design"],
@@ -191,7 +196,7 @@ test("invalid output leaves structured specification unchanged and shows genuine
   runtime.responses = ["not valid json"];
   const engine = new StudioEngine(store, runtime, () => {});
   await engine.enqueue(p.id, { text: "Build it", station: "design" });
-  await settled(store, p.id);
+  await settled(store, p.id, engine);
   assert.equal(p.revision, 0);
   assert.equal(p.scene.kind, "plasma");
   assert.equal(p.changes[0].status, "failed");
@@ -219,7 +224,7 @@ test("invalid artifact references roll back the whole specialist result", async 
   ];
   const engine = new StudioEngine(store, runtime, () => {});
   await engine.enqueue(p.id, { text: "Create a shape", station: "design" });
-  await settled(store, p.id);
+  await settled(store, p.id, engine);
   assert.equal(p.revision, 1);
   assert.equal(p.scene.kind, "plasma");
   assert.equal(p.artifacts.length, 0);
@@ -230,6 +235,153 @@ test("invalid artifact references roll back the whole specialist result", async 
   );
   assert.equal(saved.scene.kind, "plasma");
   assert.equal(saved.revision, 1);
+});
+test("a geometry-only correction invalidates the old assembly while keeping inspectable history", async (t) => {
+  const store = new ProjectStore(await temp(t));
+  await store.init();
+  const p = await store.create();
+  await writeFile(
+    path.join(store.workspace(p.id), "design/artifacts/model.stl"),
+    "solid old\nendsolid old",
+  );
+  const old = await store.registerArtifact(
+    p,
+    "design",
+    "design/artifacts/model.stl",
+    "Old assembly",
+    "assembly",
+  );
+  assert.equal(getPrimaryAssembly(p)?.id, old.id);
+  const runtime = new FakeRuntime();
+  runtime.responses = [
+    result({ affected: ["design"] }),
+    result({
+      scene: {
+        kind: "custom",
+        color: "#abcdef",
+        width: 130,
+        height: 70,
+        depth: 25,
+        parts: [],
+      },
+    }),
+  ];
+  const engine = new StudioEngine(store, runtime, () => {});
+  await engine.enqueue(p.id, {
+    text: "Replace the old shape",
+    station: "design",
+  });
+  await settled(store, p.id, engine);
+  assert.equal(p.changes[0].status, "completed");
+  assert.equal(getPrimaryAssembly(p), undefined);
+  assert.equal(getCurrentArtifacts(p, "design").length, 0);
+  assert.equal(p.domainState?.design?.revision, 2);
+  assert.ok(p.artifacts.some((artifact) => artifact.id === old.id));
+  const next = new ProjectStore(store.dataDir);
+  await next.init();
+  assert.equal(
+    getPrimaryAssembly(next.get(p.id)),
+    undefined,
+    "Reload must not reactivate old geometry",
+  );
+});
+
+test("structured artifact sets register roles and source revision inputs without discarding explanation-only deliverables", async (t) => {
+  const store = new ProjectStore(await temp(t));
+  await store.init();
+  const p = await store.create();
+  const runtime = new FakeRuntime();
+  runtime.runner = async (options) => {
+    if (path.basename(options.cwd) === "planning")
+      return result({ goals: ["A tangible object"], affected: ["design"] });
+    await writeFile(
+      path.join(options.cwd, "artifacts/shipping-form.stl"),
+      "solid shape\nendsolid shape",
+    );
+    return result({
+      artifacts: [
+        {
+          path: "design/artifacts/shipping-form.stl",
+          name: "Complete assembly",
+          role: "assembly",
+        },
+      ],
+    });
+  };
+  const engine = new StudioEngine(store, runtime, () => {});
+  await engine.enqueue(p.id, { text: "Create the design", station: "design" });
+  await settled(store, p.id, engine);
+  assert.equal(p.changes[0].status, "completed");
+  const assembly = getPrimaryAssembly(p)!;
+  assert.equal(assembly.role, "assembly");
+  assert.equal(p.domainState?.design?.inputRevisions?.planning, 1);
+  assert.match(
+    runtime.calls[1].instructions,
+    /complete current deliverable set/,
+  );
+  const recorded = structuredClone(p.domainState);
+  runtime.runner = undefined;
+  runtime.responses = [result()];
+  await engine.enqueue(p.id, {
+    text: "Explain the design",
+    station: "planning",
+  });
+  await settled(store, p.id, engine);
+  assert.equal(getPrimaryAssembly(p)?.id, assembly.id);
+  assert.deepEqual(p.domainState, recorded);
+});
+test("changed planning intent and BOM invalidate unreplaced domain files without disturbing other domains", async (t) => {
+  const store = new ProjectStore(await temp(t));
+  await store.init();
+  const p = await store.create({ template: "wheel" });
+  await writeFile(
+    path.join(store.workspace(p.id), "electronics/artifacts/board.json"),
+    "{}",
+  );
+  const board = await store.registerArtifact(
+    p,
+    "electronics",
+    "electronics/artifacts/board.json",
+  );
+  const softwareIds = getCurrentArtifacts(p, "software").map(
+    (artifact) => artifact.id,
+  );
+  assert.ok(getCurrentArtifacts(p, "planning").length);
+  const runtime = new FakeRuntime();
+  runtime.responses = [
+    result({
+      goals: ["Build a new device with different controls"],
+      affected: ["electronics"],
+    }),
+    result({
+      parts: [
+        {
+          ...p.parts[0],
+          quantity: 2,
+          manufacturerPart: null,
+          estimatedCost: null,
+          currency: null,
+          sourceUrl: null,
+        },
+      ],
+    }),
+  ];
+  const engine = new StudioEngine(store, runtime, () => {});
+  await engine.enqueue(p.id, {
+    text: "Change the intent and hardware",
+    station: "planning",
+  });
+  await settled(store, p.id, engine);
+  assert.equal(p.changes[0].status, "completed");
+  assert.deepEqual(getCurrentArtifacts(p, "planning"), []);
+  assert.deepEqual(getCurrentArtifacts(p, "electronics"), []);
+  assert.deepEqual(
+    getCurrentArtifacts(p, "software").map((artifact) => artifact.id),
+    softwareIds,
+  );
+  assert.ok(p.artifacts.some((artifact) => artifact.id === board.id));
+  assert.equal(p.domainState?.planning?.revision, 1);
+  assert.equal(p.domainState?.electronics?.revision, 2);
 });
 test("formatting stalls retry once in the same thread without repeating successful tools", async (t) => {
   const store = new ProjectStore(await temp(t));
@@ -243,7 +395,7 @@ test("formatting stalls retry once in the same thread without repeating successf
   };
   const engine = new StudioEngine(store, runtime, () => {});
   await engine.enqueue(p.id, { text: "Record a goal", station: "planning" });
-  await settled(store, p.id);
+  await settled(store, p.id, engine);
   assert.equal(runtime.calls.length, 2);
   assert.equal(
     runtime.calls[1].threadId,
@@ -255,7 +407,7 @@ test("formatting stalls retry once in the same thread without repeating successf
     throw new StructuredOutputStallError("stalled again");
   };
   await engine.enqueue(p.id, { text: "Another request", station: "planning" });
-  await settled(store, p.id);
+  await settled(store, p.id, engine);
   assert.equal(runtime.calls.length, 4);
   assert.equal(p.changes[1].status, "failed");
 });
@@ -278,12 +430,12 @@ test("cancel interrupts active work, cancels queued jobs, then accepts a new job
     await new Promise((r) => setTimeout(r, 5));
   await engine.enqueue(p.id, { text: "Queued", station: "design" });
   await engine.cancel(p.id);
-  await settled(store, p.id);
+  await settled(store, p.id, engine);
   assert.ok(p.changes.every((c) => c.status === "cancelled"));
   assert.equal(runtime.calls.length, 1);
   runtime.runner = undefined;
   await engine.enqueue(p.id, { text: "Continue", station: "planning" });
-  await settled(store, p.id);
+  await settled(store, p.id, engine);
   assert.equal(p.changes.at(-1)!.status, "completed");
 });
 test("exports preserve artifact bytes and revision hash while denying symlinks and traversal", async (t) => {
@@ -341,6 +493,46 @@ test("BOM export escapes formulas and never invents missing prices", async (t) =
   assert.match(csv, /'=HYPERLINK/);
   assert.match(csv, /Unverified proposal/);
   assert.ok(!csv.includes("undefined"));
+});
+test("artifact listing never imports uncommitted workspace files or overwrites a saved revision", async (t) => {
+  const studio = await createStudioServer({
+    dataDir: await temp(t),
+    runtime: new FakeRuntime(),
+  });
+  t.after(() => studio.close());
+  const p = await studio.store.create();
+  const workspaceFile = path.join(
+    studio.store.workspace(p.id),
+    "design/artifacts/model.stl",
+  );
+  await writeFile(workspaceFile, "solid accepted\nendsolid accepted");
+  const artifact = await studio.store.registerArtifact(
+    p,
+    "design",
+    "design/artifacts/model.stl",
+    "Assembly",
+    "assembly",
+  );
+  await studio.store.save(p);
+  await writeFile(workspaceFile, "uncommitted replacement from a failed run");
+  await writeFile(
+    path.join(studio.store.workspace(p.id), "design/artifacts/bracket.stl"),
+    "uncommitted new part",
+  );
+  const server = await studio.listen(0);
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const response = await fetch(base + `/api/projects/${p.id}/artifacts`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), [artifact]);
+  assert.match(
+    await readFile(
+      await studio.store.readArtifact(p.id, artifact.path),
+      "utf8",
+    ),
+    /solid accepted/,
+  );
+  assert.equal(getPrimaryAssembly(p)?.id, artifact.id);
+  assert.equal(p.revision, 0);
 });
 test("shipped conceptual behaviour files execute timer completion and wheel input examples", async (t) => {
   const store = new ProjectStore(await temp(t));
@@ -445,6 +637,7 @@ test("studio preferences survive service restart on an independently assigned po
     model: "test-model",
     effort: "high",
     reducedMotion: true,
+    compactMode: true,
   };
   const saved = await fetch(base + "/api/preferences", {
     method: "POST",

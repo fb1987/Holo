@@ -31,15 +31,17 @@ If your npm version requires approval of dependency installation scripts, approv
 
 ## Your first session
 
-1. Choose **Explore the wheel** or **Start with an enclosure**. These are explicitly conceptual examples with proposed components and example behavior source.
-2. Visit the four perspectives with the bottom controls or keys **1–4**. Drag to orbit, scroll to zoom, right-drag to pan. Zoom buttons and **R** reset are available.
+1. Open the **Holo project menu** at the left of the prompt to begin a new idea or choose a wheel/enclosure example. These are explicitly conceptual examples with proposed components and example behavior source.
+2. Open the perspective control at the right of the prompt, or use keys **1–4**, to visit the four perspectives. Drag to orbit, scroll to zoom, right-drag to pan. Zoom buttons and **R** reset are available.
 3. Open **Intent & decisions** to name the idea and choose DIY, some assembly, or finished supplier assembly.
-4. Open **Connect Codex**. Holo discovers your installed Codex and account. Select the available model and thinking depth you want.
+4. Open **Settings → Connect Codex** from the perspective control. Holo discovers your installed Codex and account. Select the available model and thinking depth you want.
 5. Describe a change and press **⌘ Enter** or the arrow. For example: “Design a small USB desk controller with two buttons. I want to assemble it without soldering. Create an editable enclosure model and explain what still needs engineering review.”
 6. Inspect the ongoing work or stop it from the prompt. The strategist routes the request, specialists produce their artifacts, and recommendations return to the strategist for a bounded correction round.
 7. Open **Build package** to export the intent, BOM, available artifacts, assembly and supplier briefs, and a revision manifest with file hashes.
 
-Prompt drafts are saved separately for each idea. The selected idea, drafts, model, thinking depth, and motion preference are also saved in the local workshop, so they survive native app restarts. Closing a panel never discards a draft. Requests that need extra tool permissions appear as explicit action approvals.
+Prompt drafts are saved separately for each idea. The selected idea, drafts, model, thinking depth, motion preference, and minimal cockpit setting are also saved in the local workshop, so they survive native app restarts. Closing a panel never discards a draft. Requests that need extra tool permissions appear as explicit action approvals.
+
+The default cockpit is a single row. Its perspective control contains model selection, navigation, activity, project files, export, and settings. Switch off **Minimal cockpit** there to keep perspective tabs and quick actions visible. Generated designs open on their designated assembly; individual models and printable parts can be selected deliberately. Files separates each perspective’s current deliverables from history, and exports include a current-deliverables index. Existing projects are migrated without regenerating geometry.
 
 ## What is real today
 
@@ -103,6 +105,8 @@ Holo stores its own project memory. Signing in does not imply importing all of y
 ```sh
 npm run package:mac
 ```
+
+Packaging checks for at least 2 GiB of free working space before starting because Electron needs temporary unpacked and archived copies.
 
 The resulting `Holo.app` is under `release/`. It runs its own local Node workshop, so Node.js is not needed to launch that packaged app. Codex and engineering tools remain external dependencies. `npm run dist:mac` also produces a ZIP.
 

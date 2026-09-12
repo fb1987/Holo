@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  getDomainRevisions,
+  recordDomainArtifacts,
+} from "../shared/artifacts.js";
 import type {
   ApprovalRequest,
   ChangeRequest,
@@ -269,10 +273,12 @@ export class StudioEngine {
         : "Developing this perspective…";
     await this.publish(p);
     const revision = p.revision;
+    const inputRevisions = getDomainRevisions(p);
     const instructions =
       domainInstructions(station) +
+      "\nWhen producing artifacts, return the complete current deliverable set for your domain, including unchanged supporting files still needed. An empty artifact list preserves previous deliverables only when your canonical domain specification is unchanged. Changed goals, decisions, BOM data, or geometry without newly registered deliverables invalidate the earlier domain files; changed geometry without a newly registered assembly invalidates the old preview. Set role to assembly only for the complete design GLB/STL, part for individual printable parts, source for editable generators/CAD, render for images, document for handoff/checks, or other. Prefer one GLB assembly with materials for viewing and STL files for individual fabrication parts. Registered files missing from a nonempty replacement set remain in history only. These roles and current-file status do not assert engineering validation.\n" +
       `\nRespond using the supplied structured output schema. response is the user-facing explanation in readable Markdown; never claim outputs that do not exist. summary is a short activity summary. Use null for fields that should not change. Every scene part uses millimetres and rotation in radians, scene dimensions use millimetres, right-handed coordinates with +Y up, +Z towards the viewer. Torus size is [outer diameter,tube diameter,depth]. Preserve stable part IDs. Keep geometry within the scene dimensions and use clearly separated mechanical/electronics domains. A procedural scene is a conceptual preview. Only design may change scene. Only electronics may replace parts. Only planning may change goals or constraints. BOM verified must be false: supplier/physical verification is outside this model's authority. Do not run paid API calls, install global software, publish, or contact suppliers. You can create a local deliverable with tools available in your assigned directory. Artifacts paths must be ${station}/artifacts/<filename>, only after writing the real file. Keep final outputs concise enough for the user to understand what changed.\n`;
-    const prompt = `Project ${p.name}; revision ${revision}; build preference ${p.buildMode}.\n${brief}\n\n${this.runtime.toolInstructions?.() || ""}\nCurrent canonical specification:\n${JSON.stringify({ description: p.description, goals: p.goals, constraints: p.constraints, scene: p.scene, parts: p.parts, decisions: p.decisions.slice(-20), artifacts: p.artifacts })}\n\nCurrent change ID: ${change.id}. Read local project files if needed. Your workspace is ${station}/; other domain folders are read-only. Planning should set a concise project name when it is still Untitled invention, and maintain a plain-language description of the intended object. Only planning may update name or description; other specialists return null. Preserve a deliberate existing name unless the user's request calls for a rename. If an essential detail is missing, use response to ask the user and do not invent a commitment. Do not use request_user_input tools: Holo displays your response directly. Return a complete structured result.`;
+    const prompt = `Project ${p.name}; revision ${revision}; build preference ${p.buildMode}.\n${brief}\n\n${this.runtime.toolInstructions?.() || ""}\nCurrent canonical specification:\n${JSON.stringify({ description: p.description, goals: p.goals, constraints: p.constraints, scene: p.scene, parts: p.parts, decisions: p.decisions.slice(-20), artifacts: p.artifacts, domainState: p.domainState, primaryAssemblyId: p.primaryAssemblyId })}\n\nCurrent change ID: ${change.id}. Read local project files if needed. Your workspace is ${station}/; other domain folders are read-only. Planning should set a concise project name when it is still Untitled invention, and maintain a plain-language description of the intended object. Only planning may update name or description; other specialists return null. Preserve a deliberate existing name unless the user's request calls for a rename. If an essential detail is missing, use response to ask the user and do not invent a commitment. Do not use request_user_input tools: Holo displays your response directly. Return a complete structured result.`;
     try {
       const run = (retry = false) =>
         this.runtime.run({
@@ -384,8 +390,47 @@ export class StudioEngine {
           station,
           artifact.path,
           artifact.name,
+          artifact.role,
         );
       await this.store.scanArtifacts(candidate, station, false);
+      const currentIds = candidate.artifacts
+        .filter(
+          (artifact) =>
+            artifact.domain === station &&
+            artifact.revision === candidate.revision,
+        )
+        .map((artifact) => artifact.id);
+      const sceneChanged =
+        station === "design" &&
+        JSON.stringify(candidate.scene) !== JSON.stringify(p.scene);
+      const domainChanged =
+        sceneChanged ||
+        JSON.stringify([
+          candidate.name,
+          candidate.description,
+          candidate.goals,
+          candidate.constraints,
+          candidate.parts,
+          candidate.decisions,
+        ]) !==
+          JSON.stringify([
+            p.name,
+            p.description,
+            p.goals,
+            p.constraints,
+            p.parts,
+            p.decisions,
+          ]);
+      if (currentIds.length || domainChanged) {
+        recordDomainArtifacts(
+          candidate,
+          station,
+          currentIds,
+          inputRevisions,
+          !domainChanged,
+        );
+        candidate.source = "original";
+      }
       if (signal.aborted) throw new Error("Change cancelled.");
       if (p.revision !== revision)
         throw new StudioError(
@@ -402,6 +447,9 @@ export class StudioEngine {
       p.parts = candidate.parts;
       p.decisions = candidate.decisions;
       p.artifacts = candidate.artifacts;
+      p.domainState = candidate.domainState;
+      p.primaryAssemblyId = candidate.primaryAssemblyId;
+      p.source = candidate.source;
       p.revision = candidate.revision;
       p.messages.push({
         id: uid(),

@@ -88,7 +88,23 @@ export const outputSchema = z
       .max(12),
     artifacts: z
       .array(
-        z.object({ path: z.string().min(1).max(512), name: label }).strict(),
+        z
+          .object({
+            path: z.string().min(1).max(512),
+            name: label,
+            role: z
+              .enum([
+                "assembly",
+                "part",
+                "source",
+                "render",
+                "document",
+                "other",
+              ])
+              .nullable()
+              .default(null),
+          })
+          .strict(),
       )
       .max(80),
   })
@@ -114,6 +130,9 @@ function codexCompatibleSchema(value: unknown): any {
     }
     // URL validity is still enforced by Zod before committing the result.
     if (node.format === "uri") delete node.format;
+    // Runtime defaults accept older saved/test outputs; models receive only the
+    // required nullable field, without a default annotation in their schema.
+    delete node.default;
     delete node.$schema;
     return node;
   }

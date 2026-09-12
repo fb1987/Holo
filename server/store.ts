@@ -12,6 +12,11 @@ import type {
 } from "../shared/types.js";
 import { stations } from "./schema.js";
 import { sampleFiles } from "./templates.js";
+import {
+  getDomainState,
+  inferArtifactRole,
+  normalizeArtifactState,
+} from "../shared/artifacts.js";
 
 export class StudioError extends Error {
   constructor(
@@ -125,8 +130,9 @@ export class ProjectStore {
             p.agents[s].status = "idle";
             p.agents[s].summary = "Previous session ended.";
           }
+        const migrated = normalizeArtifactState(p);
         this.projects.set(p.id, p);
-        if (interrupted) await this.save(p);
+        if (interrupted || migrated) await this.save(p, !interrupted);
       } catch {
         /* A damaged project is not silently overwritten. */
       }
@@ -251,8 +257,9 @@ export class ProjectStore {
     if (p.artifacts.length) await this.save(p);
     return p;
   }
-  async save(p: Project) {
-    p.updatedAt = now();
+  async save(p: Project, preserveUpdatedAt = false) {
+    if (!preserveUpdatedAt) p.updatedAt = now();
+    normalizeArtifactState(p);
     this.projects.set(p.id, p);
     const data = JSON.stringify(p, null, 2);
     const spec = JSON.stringify(
@@ -268,6 +275,8 @@ export class ProjectStore {
         parts: p.parts,
         decisions: p.decisions,
         artifacts: p.artifacts,
+        primaryAssemblyId: p.primaryAssemblyId,
+        domainState: p.domainState,
         readiness: p.readiness,
       },
       null,
@@ -301,10 +310,22 @@ export class ProjectStore {
     station: Station,
     relative: string,
     name?: string,
+    role?: Artifact["role"] | null,
   ): Promise<Artifact> {
     const normalized = relative.replaceAll("\\", "/");
     if (!normalized.startsWith(`${station}/artifacts/`))
       throw new StudioError(`Artifact must be inside ${station}/artifacts/.`);
+    if (
+      role === "assembly" &&
+      (station !== "design" || !/\.(glb|stl)$/i.test(normalized))
+    )
+      throw new StudioError(
+        "An assembly preview must be a GLB or STL in the design domain.",
+      );
+    if (role === "part" && !/\.(glb|stl|step|stp|3mf|obj)$/i.test(normalized))
+      throw new StudioError(
+        "A part artifact must be a supported geometry file.",
+      );
     const source = await safeFile(this.workspace(p.id), normalized);
     const data = await fs.readFile(source);
     if (data.length > 100 * 1024 * 1024)
@@ -329,9 +350,28 @@ export class ProjectStore {
       domain: station,
       revision: p.revision,
       bytes: data.length,
+      ...(role ? { role } : {}),
     };
+    artifact.role = inferArtifactRole(artifact);
+    p.domainState = getDomainState(p);
+    const previous = p.domainState[station];
     p.artifacts = p.artifacts.filter((a) => a.path !== out);
     p.artifacts.push(artifact);
+    p.domainState[station] = {
+      revision: p.revision,
+      artifactIds: [
+        ...new Set([
+          ...(previous?.revision === p.revision ? previous.artifactIds : []),
+          artifact.id,
+        ]),
+      ],
+      ...(previous?.revision === p.revision && previous.inputRevisions
+        ? { inputRevisions: previous.inputRevisions }
+        : {}),
+    };
+    if (station === "design" && artifact.role === "assembly")
+      delete p.primaryAssemblyId;
+    normalizeArtifactState(p);
     return artifact;
   }
   async scanArtifacts(p: Project, station?: Station, persist = true) {
@@ -341,9 +381,9 @@ export class ProjectStore {
       );
       for (const file of files) {
         const source = `${s}/artifacts/${file}`;
-        const already = p.artifacts.find((a) =>
-          a.path.endsWith(`/${s}/${file}`),
-        );
+        const already = p.artifacts
+          .filter((a) => a.path.endsWith(`/${s}/${file}`))
+          .sort((a, b) => b.revision - a.revision)[0];
         if (already) {
           try {
             if (

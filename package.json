@@ -1,6 +1,6 @@
 {
   "name": "holo-studio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "One idea. Every perspective. An invention studio for macOS.",
@@ -13,8 +13,8 @@
     "start": "electron .",
     "test": "tsx --test tests/*.test.ts",
     "check": "tsc --noEmit",
-    "package:mac": "npm run build && electron-builder --mac dir",
-    "dist:mac": "npm run build && electron-builder --mac zip"
+    "package:mac": "node scripts/require-build-space.mjs && npm run build && electron-builder --mac dir",
+    "dist:mac": "node scripts/require-build-space.mjs && npm run build && electron-builder --mac zip"
   },
   "dependencies": {
     "archiver": "^7.0.1",

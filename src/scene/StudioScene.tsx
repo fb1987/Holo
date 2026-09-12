@@ -800,8 +800,10 @@ function ParametricObject({
   scene,
   ...props
 }: PartProps & { scene: SceneSpec }) {
-  if (scene.kind === "wheel") return <Wheel scene={scene} {...props} />;
-  if (scene.kind === "enclosure") return <Enclosure scene={scene} {...props} />;
+  if (!scene.parts.length && scene.kind === "wheel")
+    return <Wheel scene={scene} {...props} />;
+  if (!scene.parts.length && scene.kind === "enclosure")
+    return <Enclosure scene={scene} {...props} />;
   const scale = 3.2 / Math.max(scene.width, scene.height, scene.depth, 1);
   return (
     <group>
@@ -907,9 +909,8 @@ function LoadedArtifact({
         const box = new THREE.Box3().setFromObject(object);
         const size = box.getSize(new THREE.Vector3());
         const center = box.getCenter(new THREE.Vector3());
-        // Fit the complete bounding sphere: thick imported models must clear
-        // the title and bottom cockpit even when viewed at an angle.
-        const scale = 2.7 / Math.max(size.length(), 0.001);
+        // Frame the complete assembly, including thick models at an angle.
+        const scale = 3.7 / Math.max(size.length(), 0.001);
         object.position.copy(center.multiplyScalar(-scale));
         object.scale.setScalar(scale);
         setLoaded({ url, object });
@@ -929,7 +930,7 @@ function LoadedArtifact({
       <group
         onClick={(event) => {
           event.stopPropagation();
-          if (event.delta < 5) onSelect("artifact");
+          if (event.delta < 5) onSelect(event.object.name || "model");
         }}
       >
         <primitive object={loaded.object} />
@@ -1034,6 +1035,7 @@ function SceneContents(props: StudioSceneProps) {
         <Plasma reducedMotion={props.reducedMotion} busy={props.busy} />
       ) : electronic &&
         props.flat &&
+        !props.scene.parts.length &&
         (props.scene.kind === "wheel" || props.scene.kind === "enclosure") ? (
         <UnfoldedBoard
           selected={props.selectedPart}

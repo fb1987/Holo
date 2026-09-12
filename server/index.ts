@@ -155,7 +155,6 @@ export async function createStudioServer(options: ServerOptions = {}) {
     });
     app.get("/api/projects/:id/artifacts", async (req, res) => {
       const p = store.get(req.params.id);
-      if (!engine.isBusy(p.id)) await store.scanArtifacts(p);
       res.json(p.artifacts);
     });
     app.get("/api/projects/:id/files", async (req, res) => {
@@ -191,14 +190,12 @@ export async function createStudioServer(options: ServerOptions = {}) {
           return;
         }
         if (error instanceof z.ZodError) {
-          res
-            .status(400)
-            .json({
-              error: "Invalid request.",
-              details: error.issues.map(
-                (i) => `${i.path.join(".")}: ${i.message}`,
-              ),
-            });
+          res.status(400).json({
+            error: "Invalid request.",
+            details: error.issues.map(
+              (i) => `${i.path.join(".")}: ${i.message}`,
+            ),
+          });
           return;
         }
         const status =
@@ -207,14 +204,12 @@ export async function createStudioServer(options: ServerOptions = {}) {
             : (error as any)?.status === 400
               ? 400
               : 500;
-        res
-          .status(status)
-          .json({
-            error:
-              error instanceof Error
-                ? error.message
-                : "Holo could not complete this request.",
-          });
+        res.status(status).json({
+          error:
+            error instanceof Error
+              ? error.message
+              : "Holo could not complete this request.",
+        });
       },
     );
     let server: Server | undefined;

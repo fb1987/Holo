@@ -41,6 +41,14 @@ export interface Artifact {
   domain: Station;
   revision: number;
   bytes?: number;
+  role?: "assembly" | "part" | "source" | "render" | "document" | "other";
+}
+export interface DomainArtifactState {
+  /** Global revision at which this domain's current deliverable set was recorded. */
+  revision: number;
+  artifactIds: string[];
+  /** Available domain revisions at generation start, not a compatibility approval. */
+  inputRevisions?: Partial<Record<Station, number>>;
 }
 export interface Message {
   id: string;
@@ -89,6 +97,8 @@ export interface Project {
   scene: SceneSpec;
   parts: Part[];
   artifacts: Artifact[];
+  primaryAssemblyId?: string;
+  domainState?: Partial<Record<Station, DomainArtifactState>>;
   messages: Message[];
   decisions: Decision[];
   changes: ChangeRequest[];
@@ -132,6 +142,7 @@ export type StudioEvent =
   | { type: "runtime"; runtime: RuntimeStatus };
 
 export interface StudioPreferences {
+  compactMode?: boolean;
   lastProjectId?: string | null;
   drafts?: Record<string, string>;
   model?: string;
